@@ -10,11 +10,11 @@ to python types without use of classes.
 
 Scheme             | Python
 ------------------ | -------------------- 
-None               | None
+empty list         | None
 #t                 | True
 #f                 | False
 numeric            | float
-CONS cell          | list: [car, cdr]
-empty list         | set: {} 
-symbol             | tuple: (index,name)
+symbol             | int
+pair               | list: [car, cdr]
 built-in function  | function
+lambda             | tuple: (arguments, list of expressions)
