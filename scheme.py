@@ -19,8 +19,10 @@ def getsymbol(identifier):
 # facility to read scheme data from the input
 readbuffer = deque()     # buffers the input broken into strings
 
-def add_to_queue(string):
-    tokens = string.replace("("," ( ").replace(")"," ) ").replace("'"," ' ").split()
+def add_to_queue(line):
+    if ";" in line:
+        line = line[:line.index(";")]
+    tokens = line.replace("("," ( ").replace(")"," ) ").replace("'"," ' ").split()
     readbuffer.extend(tokens)
         
 def readvalue():
@@ -127,18 +129,23 @@ def setglobalvalue(symbol,v):
     globalcontext[symbol] = v
     
 # predefined symbols used for syntax
-symbol_define = getsymbol("define")
 symbol_quote = getsymbol("quote")
+symbol_define = getsymbol("define")
 symbol_lambda = getsymbol("lambda")
 symbol_if = getsymbol("if")
 symbol_begin = getsymbol("begin")
 symbol_let = getsymbol("let")
+symbol_set = getsymbol("set!")
+symbol_eval = getsymbol("eval")
 
 # built-in functions
-def builtin_cons(arguments):
-    if len(arguments)!=2:
-        raise Exception("Wrong number of arguments for 'cons'")
-    return arguments;
+def builtin_null(arguments):
+    if len(arguments)!=1:
+        raise Exception("Wrong number of arguments for 'null?'")   
+    if arguments[0] is None:
+        return True
+    else:
+        return False
 def builtin_car(arguments):
     if len(arguments)!=1:
         raise Exception("Wrong number of arguments for 'car'")
@@ -153,6 +160,15 @@ def builtin_cdr(arguments):
     if not isinstance(p0,list):
         raise Exception("Pair expected as argument for 'cdr'")
     return p0[1]
+def builtin_cons(arguments):
+    if len(arguments)!=2:
+        raise Exception("Wrong number of arguments for 'cons'")
+    return arguments;
+def builtin_list(arguments):
+    list = None
+    for a in reversed(arguments):
+        list = [a,list]
+    return list;
 def builtin_plus(arguments):
     sum = 0
     for x in arguments:
@@ -179,127 +195,195 @@ def builtin_less(arguments):
         raise Exception("Need numbers for '<'")
     return arguments[0] < arguments[1]
     
-setglobalvalue(getsymbol("cons"), builtin_cons)
+    
+setglobalvalue(getsymbol("null?"), builtin_null)
 setglobalvalue(getsymbol("car"), builtin_car)
 setglobalvalue(getsymbol("cdr"), builtin_cdr)
+setglobalvalue(getsymbol("cons"), builtin_cons)
+setglobalvalue(getsymbol("list"), builtin_list)
 setglobalvalue(getsymbol("+"), builtin_plus)
 setglobalvalue(getsymbol("-"), builtin_minus)
 setglobalvalue(getsymbol("<"), builtin_less)
 
-# simple evaluation (no tail-end recursion and no continuations yet)
+# evaluation of a top-level element
+# it is only here, that define is allowed
+def evaluate_toplevel(v):
+    if isinstance(v,list) and v[0] is symbol_define:
+        tail = v[1]
+        if isinstance(tail,list) and isinstance(tail[1],list):
+            p0 = tail[0]
+            if isinstance(p0, int):     # define a global symbol
+                setglobalvalue(p0, evaluate(tail[1][0], None))
+                return None
+            elif isinstance(p0, list) and isinstance(p0[0],int):   # define a symbol as a function 
+                arguments = []
+                arem = p0[1]
+                while isinstance(arem,list):
+                    if not isinstance(arem[0],int):
+                        raise Exception("Argument not a symbol")
+                    arguments.append(arem[0])
+                    arem = arem[1]
+                if isinstance(tail[1],list):
+                    setglobalvalue(p0[0], ( arguments, tail[1], None ) )                    
+                    return None
+        raise Exception("Wrong syntax for 'define'")
+    else:
+        return evaluate(v, None)
+
+# simple evaluation (no continuations yet)
 # the environment is either None, or a tuple of 3 elements:
 #   list of arguments (symbols)
 #   list of parameters (values)
 #   link to outer environment, or None
 def evaluate(v, environment):
-    if isinstance(v,int):    # symbol look-up
-        # search through stack of environments
-        ev = environment
-        while not (ev is None):
-            try:
-                idx = ev[0].index(v)
-                return ev[1][idx]
-            except ValueError:
-                ev = ev[2]
-        # if not found use global value
-        return getglobalvalue(v)
+    global recursiondepth
+    global highestrecursiondepth
+    recursiondepth=recursiondepth+1
+    highestrecursiondepth = max(highestrecursiondepth,recursiondepth)
+    res=evaluate2(v, environment)
+    recursiondepth=recursiondepth-1
+    return res
     
-    elif isinstance(v,list):  # list
-        head = v[0]
-        remainder = v[1]
-        if head is symbol_define:
-            if isinstance(remainder,list) and isinstance(remainder[1],list):
-                p0 = remainder[0]
-                if isinstance(p0, int):     # define just a symbol
-                    setglobalvalue(p0, evaluate(remainder[1][0], environment))
-                    return None
-                elif isinstance(p0, list) and isinstance(p0[0],int):   # define a symbol as a function 
+def evaluate2(v, environment):
+    # use loop to avoid recursion in some cases. each iteration will always either
+    # return from the function (with a value or an exception) or explicitely continue the loop
+    while True:
+        if v is None:
+            raise Exception("Can not evaluate empty list")
+            
+        # symbol look-up, either local or global environments
+        elif isinstance(v,int):    
+            ev = environment
+            while not (ev is None):
+                try:
+                    return ev[1][ev[0].index(v)]
+                except ValueError:
+                    ev = ev[2]
+            return getglobalvalue(v)
+        
+        elif isinstance(v,list):  
+            head = v[0]
+            tail = v[1]
+            # some syntax contructs start with a hardcoded symbol
+            if head is symbol_quote:
+                if isinstance(tail,list) and tail[1] is None:
+                    return tail[0]
+                raise Exception("Wrong syntax for 'quote'")
+            elif head is symbol_define:
+                raise Exception("Can only define at top level")
+            elif head is symbol_lambda:   # define a lambda function
+                if isinstance(tail,list) and isinstance(tail[1],list):
                     arguments = []
-                    arem = p0[1]
+                    arem = tail[0]
                     while isinstance(arem,list):
                         if not isinstance(arem[0],int):
                             raise Exception("Argument not a symbol")
                         arguments.append(arem[0])
                         arem = arem[1]
-                    setglobalvalue(p0[0], ( arguments, remainder[1] ) )                    
+                    if isinstance(tail[1], list):
+                        return ( arguments, tail[1], environment )
+                raise Exception("Wrong syntax for 'lambda'")
+            elif head is symbol_if:
+                if not (isinstance(tail,list) and isinstance(tail[1],list)):
+                    raise Exception("Wrong syntax for 'if'")
+                if not (evaluate(tail[0],environment) is False):
+                    v = tail[1][0]
+                    continue
+                elif isinstance(tail[1][1], list):
+                    v = tail[1][1][0]
+                    continue
+                else:
                     return None
-            raise Exception("Wrong syntax for 'define'")
-        elif head is symbol_quote:
-            if isinstance(remainder,list) and remainder[1] is None:
-                return remainder[0]
-            raise Exception("Wrong syntax for 'quote'")
-        elif head is symbol_if:
-            if not (isinstance(remainder,list) and isinstance(remainder[1],list)):
-                raise Exception("Wrong syntax for 'if'")
-            if not (evaluate(remainder[0],environment) is False):
-                return evaluate(remainder[1][0], environment)
-            elif isinstance(remainder[1][1], list):
-                return evaluate(remainder[1][1][0], environment)
-            else:
+            elif head is symbol_begin:
+                if isinstance(tail,list):
+                    while isinstance(tail[1],list): # not yet reached the last expression
+                        evaluate(tail[0],environment)
+                        tail = tail[1]
+                    v = tail[0]   # evaluate last without recursion
+                    continue
+                else:
+                    raise Exception("Wrong syntax for 'begin'")
+            elif head is symbol_let:
+                if not (isinstance(tail,list) and isinstance(tail[1],list)):
+                    raise Exception("Wrong syntax for 'let'")
+                varlist = tail[0]
+                parameters = []
+                arguments = []
+                while isinstance(varlist, list):
+                    vardef = varlist[0]
+                    varlist = varlist[1]
+                    if not (isinstance(vardef, list) and isinstance(vardef[0],int) and isinstance(vardef[1],list)):
+                        raise Exception("Wrong syntax for variable block in 'let'")
+                    parameters.append(vardef[0])
+                    arguments.append(evaluate(vardef[1][0], environment))
+                ev = (parameters, arguments, environment)
+                expressionlist = tail[1]
+                last = None
+                while isinstance(expressionlist, list):
+                    last = evaluate(expressionlist[0], ev)
+                    expressionlist = expressionlist[1]
+                return last
+            elif head is symbol_set:
+                if not (isinstance(tail,list) and isinstance(tail[0],int) and isinstance(tail[1],list)):
+                    raise Exception("Wrong syntax for 'set!'")
+                # symbol lookup in local environments
+                sym = tail[0]
+                ev = environment
+                while not (ev is None):
+                    if sym in ev[0]:
+                        ev[1][ev[0].index(sym)] = evaluate(tail[1][0], environment)
+                        return None
+                    else:
+                        ev = ev[2]
+                # check in global environment and raise exception if undefined
+                getglobalvalue(sym)
+                setglobalvalue(sym, evaluate(tail[1][0], environment))
                 return None
-        elif head is symbol_begin:
-            last = None
-            while isinstance(remainder,list):
-                last = evaluate(remainder[0],environment)
-                remainder = remainder[1]
-            return last
-        elif head is symbol_let:
-            if not (isinstance(remainder,list) and isinstance(remainder[1],list)):
-                raise Exception("Wrong syntax for 'let'")
-            varlist = remainder[0]
-            parameters = []
-            arguments = []
-            while isinstance(varlist, list):
-                vardef = varlist[0]
-                varlist = varlist[1]
-                if not (isinstance(vardef, list) and isinstance(vardef[0],int) and isinstance(vardef[1],list)):
-                    raise Exception("Wrong syntax for variable block in 'let'")
-                parameters.append(vardef[0])
-                arguments.append(evaluate(vardef[1][0], environment))
-            ev = (parameters, arguments, environment)
-            expressionlist = remainder[1]
-            last = None
-            while isinstance(expressionlist, list):
-                last = evaluate(expressionlist[0], ev)
-                expressionlist = expressionlist[1]
-            return last        
-        else:  # some function call
-            func = evaluate(head, environment)
-            arguments = []
-            while isinstance(remainder, list):
-                arguments.append(evaluate(remainder[0],environment))
-                remainder = remainder[1]
-            if isinstance(func,types.FunctionType): # built-in function
-                return func(arguments)
-            elif isinstance(func,tuple): # lambda function
-                if len(func[0]) != len(arguments):
-                    raise Exception("Number of parameters does not match")
-                # create new environment for evaluation
-                ev = (func[0], arguments, environment)
-                # evaluate all expressions in function and return result of last
-                body = func[1]
-                result = None
-                while isinstance(body, list):
-                    result = evaluate(body[0], ev)
-                    body = body[1]
-                return result                    
-            else:
-                raise Exception("Calling non-procedure")
-    elif v is None:
-        raise Exception("Can not evaluate empty list")
-    else:
-        return v
+            elif head is symbol_eval:
+                if not (isinstance(tail,list) and tail[1] is None):
+                    raise Exception("Wrong syntax for 'eval'")
+                return evaluate(evaluate(tail[0], environment), None)
+            # some function call                
+            else:  
+                func = evaluate(v[0], environment)
+                arguments = []
+                while isinstance(tail, list):
+                    arguments.append(evaluate(tail[0],environment))
+                    tail = tail[1]
+                if isinstance(func,types.FunctionType): # built-in function
+                    return func(arguments)
+                elif isinstance(func,tuple): # lambda function
+                    if len(func[0]) != len(arguments):
+                        raise Exception("Number of parameters does not match")
+                    ev = func[2]    # environment of the function definition
+                    if len(arguments)>0:  # when having parameters, extend the environment
+                        ev = (func[0], arguments, ev)
+                    # evaluate all expressions in function and return result of last                    
+                    tail = func[1]
+                    while isinstance(tail[1],list): # not yet reached the last expression
+                        evaluate(tail[0],ev)
+                        tail = tail[1]
+                    return evaluate(tail[0],ev)      
+                else:
+                    raise Exception("Calling non-procedure")
+        # eveything else just evaluates to itself
+        else:
+            return v
         
 # main program
 if len(sys.argv)>1:
     with open(sys.argv[1]) as fp:
-        add_to_queue(fp.read())
+        for line in fp:
+            add_to_queue(line)
 while True:
     v = readvalue()
     if v==None:
         break;
     try:
-        r = evaluate(v, None)
+        recursiondepth=0
+        highestrecursiondepth=0
+        r = evaluate_toplevel(v)
+        print("Recursion:",recursiondepth,highestrecursiondepth)
         if r is None and isinstance(v,list) and v[0] is symbol_define:
             pass    # do not write result of define
         else:

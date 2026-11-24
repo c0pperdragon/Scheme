@@ -17,4 +17,4 @@ numeric            | float
 symbol             | int
 pair               | list: [car, cdr]
 built-in function  | function
-lambda             | tuple: (arguments, list of expressions)
+lambda             | tuple: (arguments, list of expressions, environment)
