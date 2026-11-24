@@ -107,8 +107,8 @@ def writevalue(v):
         print(hash(v), end="")
     elif isinstance(v,tuple):  # lambda function
         print("#L", end="")
-        writevalue(v(0))
-        writevalue(v(1))
+        print(v[0], end="")
+        writevalue(v[1])
     else:                      # unknown
         print("?",v, end="")
                 
@@ -236,15 +236,6 @@ def evaluate_toplevel(v):
 #   list of parameters (values)
 #   link to outer environment, or None
 def evaluate(v, environment):
-    global recursiondepth
-    global highestrecursiondepth
-    recursiondepth=recursiondepth+1
-    highestrecursiondepth = max(highestrecursiondepth,recursiondepth)
-    res=evaluate2(v, environment)
-    recursiondepth=recursiondepth-1
-    return res
-    
-def evaluate2(v, environment):
     # use loop to avoid recursion in some cases. each iteration will always either
     # return from the function (with a value or an exception) or explicitely continue the loop
     while True:
@@ -324,19 +315,19 @@ def evaluate2(v, environment):
             elif head is symbol_set:
                 if not (isinstance(tail,list) and isinstance(tail[0],int) and isinstance(tail[1],list)):
                     raise Exception("Wrong syntax for 'set!'")
+                v = evaluate(tail[1][0], environment)   # do evaluation, no matter if symbol can be set
                 # symbol lookup in local environments
                 sym = tail[0]
                 ev = environment
                 while not (ev is None):
                     if sym in ev[0]:
-                        ev[1][ev[0].index(sym)] = evaluate(tail[1][0], environment)
-                        return None
+                        ev[1][ev[0].index(sym)] = v
+                        return v
                     else:
                         ev = ev[2]
-                # check in global environment and raise exception if undefined
-                getglobalvalue(sym)
-                setglobalvalue(sym, evaluate(tail[1][0], environment))
-                return None
+                getglobalvalue(sym)   # check for existance (raise exception otherwise)
+                setglobalvalue(sym, v)
+                return v
             elif head is symbol_eval:
                 if not (isinstance(tail,list) and tail[1] is None):
                     raise Exception("Wrong syntax for 'eval'")
@@ -380,15 +371,12 @@ while True:
     if v==None:
         break;
     try:
-        recursiondepth=0
-        highestrecursiondepth=0
         r = evaluate_toplevel(v)
-        print("Recursion:",recursiondepth,highestrecursiondepth)
         if r is None and isinstance(v,list) and v[0] is symbol_define:
             pass    # do not write result of define
         else:
             writevalue(r)
             print()
     except Exception as e:
-#        traceback.print_tb(e.__traceback__)
+        traceback.print_tb(e.__traceback__)
         print(e)    
