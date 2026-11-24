@@ -19,7 +19,7 @@ def getsymbol(identifier):
 # facility to read scheme data from the input
 readbuffer = deque()     # buffers the input broken into strings
 
-def add_to_queue(line):
+def add_to_buffer(line):
     if ";" in line:
         line = line[:line.index(";")]
     tokens = line.replace("("," ( ").replace(")"," ) ").replace("'"," ' ").split()
@@ -248,16 +248,13 @@ def evaluate2(v, environment):
     # use loop to avoid recursion in some cases. each iteration will always either
     # return from the function (with a value or an exception) or explicitely continue the loop
     while True:
-        if v is None:
-            raise Exception("Can not evaluate empty list")
-            
         # symbol look-up, either local or global environments
-        elif isinstance(v,int):    
+        if isinstance(v,int):    
             ev = environment
             while not (ev is None):
-                try:
+                if v in ev[0]:
                     return ev[1][ev[0].index(v)]
-                except ValueError:
+                else:
                     ev = ev[2]
             return getglobalvalue(v)
         
@@ -311,18 +308,19 @@ def evaluate2(v, environment):
                 arguments = []
                 while isinstance(varlist, list):
                     vardef = varlist[0]
-                    varlist = varlist[1]
                     if not (isinstance(vardef, list) and isinstance(vardef[0],int) and isinstance(vardef[1],list)):
                         raise Exception("Wrong syntax for variable block in 'let'")
                     parameters.append(vardef[0])
                     arguments.append(evaluate(vardef[1][0], environment))
-                ev = (parameters, arguments, environment)
-                expressionlist = tail[1]
-                last = None
-                while isinstance(expressionlist, list):
-                    last = evaluate(expressionlist[0], ev)
-                    expressionlist = expressionlist[1]
-                return last
+                    varlist = varlist[1]
+                environment = (parameters, arguments, environment)
+                tail = tail[1]
+                while isinstance(tail[1],list): # not yet reached the last expression
+                    evaluate(tail[0],environment)
+                    tail = tail[1]
+                # do tail-end recursion
+                v = tail[0]
+                continue
             elif head is symbol_set:
                 if not (isinstance(tail,list) and isinstance(tail[0],int) and isinstance(tail[1],list)):
                     raise Exception("Wrong syntax for 'set!'")
@@ -345,7 +343,7 @@ def evaluate2(v, environment):
                 return evaluate(evaluate(tail[0], environment), None)
             # some function call                
             else:  
-                func = evaluate(v[0], environment)
+                func = evaluate(head, environment)
                 arguments = []
                 while isinstance(tail, list):
                     arguments.append(evaluate(tail[0],environment))
@@ -355,15 +353,17 @@ def evaluate2(v, environment):
                 elif isinstance(func,tuple): # lambda function
                     if len(func[0]) != len(arguments):
                         raise Exception("Number of parameters does not match")
-                    ev = func[2]    # environment of the function definition
+                    environment = func[2]    # use environment of the function definition
                     if len(arguments)>0:  # when having parameters, extend the environment
-                        ev = (func[0], arguments, ev)
+                        environment = (func[0], arguments, environment)
                     # evaluate all expressions in function and return result of last                    
                     tail = func[1]
                     while isinstance(tail[1],list): # not yet reached the last expression
-                        evaluate(tail[0],ev)
+                        evaluate(tail[0],environment)
                         tail = tail[1]
-                    return evaluate(tail[0],ev)      
+                    # do tail-end recursion
+                    v = tail[0]
+                    continue
                 else:
                     raise Exception("Calling non-procedure")
         # eveything else just evaluates to itself
@@ -374,7 +374,7 @@ def evaluate2(v, environment):
 if len(sys.argv)>1:
     with open(sys.argv[1]) as fp:
         for line in fp:
-            add_to_queue(line)
+            add_to_buffer(line)
 while True:
     v = readvalue()
     if v==None:
