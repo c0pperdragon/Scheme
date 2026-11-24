@@ -46,12 +46,9 @@
       (newline)
       (yield)
       (hanoi store to from (- amount 1)) ) ) )
-
-(display "Solving 3 instances of 'Towers of Hanoi' in parallel")
-(newline)
+      
+; solve 3 instances of towers of hanoi in parallel
 (start (lambda () (hanoi 'X 'Y 'Z 2)))
 (start (lambda () (hanoi 'A 'B 'C 3)))
 (start (lambda () (hanoi '1 '2 '3 4)))
 (finish-all)
-(display "Done")
-(newline)

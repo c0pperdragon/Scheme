@@ -128,15 +128,6 @@ def setglobalvalue(symbol,v):
         globalcontext.append(globalcontext)  # use the dictionary itself to denote undefined value
     globalcontext[symbol] = v
     
-# predefined symbols used for syntax
-symbol_quote = getsymbol("quote")
-symbol_define = getsymbol("define")
-symbol_lambda = getsymbol("lambda")
-symbol_if = getsymbol("if")
-symbol_begin = getsymbol("begin")
-symbol_let = getsymbol("let")
-symbol_set = getsymbol("set!")
-symbol_eval = getsymbol("eval")
 
 # built-in functions
 def builtin_null(arguments):
@@ -169,6 +160,26 @@ def builtin_list(arguments):
     for a in reversed(arguments):
         list = [a,list]
     return list;
+def builtin_append(arguments):
+    if len(arguments)<1:
+        raise Exception("Wrong number of arguments for 'append'")        
+    totallist = None
+    last = None
+    for a in arguments[:-1]:
+        l = a
+        while isinstance(l,list):
+            e = [l[0], None]
+            l = l[1]                
+            if totallist is None:
+                totallist = e
+            else:
+                last[1] = e
+            last = e
+    if totallist is None:
+        return arguments[-1]
+    else:
+        last[1] = arguments[-1]
+        return totallist
 def builtin_plus(arguments):
     sum = 0
     for x in arguments:
@@ -194,16 +205,52 @@ def builtin_less(arguments):
     if not (isinstance(arguments[0],float) and isinstance(arguments[1],float)):
         raise Exception("Need numbers for '<'")
     return arguments[0] < arguments[1]
-    
+def builtin_lessequal(arguments):
+    if len(arguments)!=2:
+        raise Exception("Wrong number of arguments for '<='")
+    if not (isinstance(arguments[0],float) and isinstance(arguments[1],float)):
+        raise Exception("Need numbers for '<='")
+    return arguments[0] <= arguments[1]
+def builtin_not(arguments):
+    if len(arguments)!=1:
+        raise Exception("Wrong number of arguments for 'not")
+    if arguments[0] is False:
+        return True
+    else:
+        return False
+def builtin_display(arguments):
+    if len(arguments)!=1:
+        raise Exception("Wrong number of arguments for 'display'")
+    writevalue(arguments[1])
+def builtin_newline(arguments):
+    if len(arguments)!=0:
+        raise Exception("Wrong number of arguments for 'newline'")
+    print()
     
 setglobalvalue(getsymbol("null?"), builtin_null)
 setglobalvalue(getsymbol("car"), builtin_car)
 setglobalvalue(getsymbol("cdr"), builtin_cdr)
 setglobalvalue(getsymbol("cons"), builtin_cons)
 setglobalvalue(getsymbol("list"), builtin_list)
+setglobalvalue(getsymbol("append"), builtin_append)
 setglobalvalue(getsymbol("+"), builtin_plus)
 setglobalvalue(getsymbol("-"), builtin_minus)
 setglobalvalue(getsymbol("<"), builtin_less)
+setglobalvalue(getsymbol("<="), builtin_lessequal)
+setglobalvalue(getsymbol("not"), builtin_not)
+setglobalvalue(getsymbol("display"), builtin_display)
+setglobalvalue(getsymbol("newline"), builtin_newline)
+
+# predefined symbols used for syntax
+symbol_quote = getsymbol("quote")
+symbol_define = getsymbol("define")
+symbol_lambda = getsymbol("lambda")
+symbol_if = getsymbol("if")
+symbol_begin = getsymbol("begin")
+symbol_let = getsymbol("let")
+symbol_set = getsymbol("set!")
+symbol_eval = getsymbol("eval")
+symbol_callcc = getsymbol("call/cc")
 
 # evaluation of a top-level element
 # it is only here, that define is allowed
@@ -331,7 +378,11 @@ def evaluate(v, environment):
             elif head is symbol_eval:
                 if not (isinstance(tail,list) and tail[1] is None):
                     raise Exception("Wrong syntax for 'eval'")
-                return evaluate(evaluate(tail[0], environment), None)
+                v = evaluate(tail[0], environment)
+                environment = None
+                continue
+            elif head is symbol_callcc:
+                raise Exception("'call/cc' not implemented yet")
             # some function call                
             else:  
                 func = evaluate(head, environment)
@@ -378,5 +429,5 @@ while True:
             writevalue(r)
             print()
     except Exception as e:
-        traceback.print_tb(e.__traceback__)
+#        traceback.print_tb(e.__traceback__)
         print(e)    
