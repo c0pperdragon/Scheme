@@ -12,16 +12,14 @@
 
 ( define (start usercode)
   ( enqueue 
-    ( lambda 
-      ()
+    ( lambda ()
       (usercode)
       (stop) ) ) )
 
 ( define (yield)
   ( let ((executable (dequeue)))
     ( call/cc 
-      ( lambda 
-        (cc)
+      ( lambda (cc)
         (enqueue cc)
         (executable) ) ) ) )
 
@@ -40,9 +38,7 @@
     0
     ( begin 
       (hanoi from store to (- amount 1))
-      (display from)
-      (display " ")
-      (display to)
+      (display (list from to))
       (newline)
       (yield)
       (hanoi store to from (- amount 1)) ) ) )

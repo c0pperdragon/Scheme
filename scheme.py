@@ -1,6 +1,5 @@
 import sys
 import types
-import traceback
 from collections import deque 
 
 # dictionary to keep symbols
@@ -15,6 +14,22 @@ def getsymbol(identifier):
     symbols[identifier] = s
     identifiers.append(identifier)
     return s
+
+# global data storage for symbol values
+globalcontext = []  # int -> value 
+
+def getglobalvalue(symbol):
+    if symbol>=len(globalcontext):
+        raise Exception("Undefined symbol: "+identifiers[symbol])
+    v = globalcontext[symbol]
+    if v is globalcontext:
+        raise Exception("Undefined symbol: "+identifiers[symbol])
+    return v
+    
+def setglobalvalue(symbol,v):
+    while symbol>=len(globalcontext):
+        globalcontext.append(globalcontext)  # use the list itself to denote undefined value
+    globalcontext[symbol] = v
 
 # facility to read scheme data from the input
 readbuffer = deque()     # buffers the input broken into strings
@@ -108,26 +123,20 @@ def writevalue(v):
     elif isinstance(v,tuple):  # lambda function
         print("#L", end="")
         print(v[0], end="")
-        writevalue(v[1])
+    elif isinstance(v,dict):  # continuation
+        print("#C", end="")
+        print(hash(v), end="")
     else:                      # unknown
         print("?",v, end="")
-                
-# global data storage for symbol values
-globalcontext = []               
-
-def getglobalvalue(symbol):
-    if symbol>=len(globalcontext):
-        raise Exception("Undefined symbol: "+identifiers[symbol])
-    v = globalcontext[symbol]
-    if v is globalcontext:
-        raise Exception("Undefined symbol: "+identifiers[symbol])
-    return v
-    
-def setglobalvalue(symbol,v):
-    while symbol>=len(globalcontext):
-        globalcontext.append(globalcontext)  # use the dictionary itself to denote undefined value
-    globalcontext[symbol] = v
-    
+                    
+# predefined symbols used for syntax
+symbol_quote = getsymbol("quote")
+symbol_define = getsymbol("define")
+symbol_lambda = getsymbol("lambda")
+symbol_if = getsymbol("if")
+symbol_begin = getsymbol("begin")
+symbol_let = getsymbol("let")
+symbol_set = getsymbol("set!")
 
 # built-in functions
 def builtin_null(arguments):
@@ -211,6 +220,18 @@ def builtin_lessequal(arguments):
     if not (isinstance(arguments[0],float) and isinstance(arguments[1],float)):
         raise Exception("Need numbers for '<='")
     return arguments[0] <= arguments[1]
+def builtin_greater(arguments):
+    if len(arguments)!=2:
+        raise Exception("Wrong number of arguments for '>'")
+    if not (isinstance(arguments[0],float) and isinstance(arguments[1],float)):
+        raise Exception("Need numbers for '>'")
+    return arguments[0] > arguments[1]
+def builtin_greaterequal(arguments):
+    if len(arguments)!=2:
+        raise Exception("Wrong number of arguments for '>='")
+    if not (isinstance(arguments[0],float) and isinstance(arguments[1],float)):
+        raise Exception("Need numbers for '>='")
+    return arguments[0] >= arguments[1]
 def builtin_not(arguments):
     if len(arguments)!=1:
         raise Exception("Wrong number of arguments for 'not")
@@ -221,12 +242,28 @@ def builtin_not(arguments):
 def builtin_display(arguments):
     if len(arguments)!=1:
         raise Exception("Wrong number of arguments for 'display'")
-    writevalue(arguments[1])
+    writevalue(arguments[0])
 def builtin_newline(arguments):
     if len(arguments)!=0:
         raise Exception("Wrong number of arguments for 'newline'")
     print()
-    
+def builtin_eval(arguments): 
+    if len(arguments)!=1:
+        raise Exception("Wrong number of arguments for 'eval'")
+    r = yield from evaluate(arguments[0], None)
+    return r
+def builtin_callcc(arguments):
+    if len(arguments)!=1:
+        raise Exception("Wrong number of arguments for 'call/cc'")
+    func = arguments[0]
+    if not isinstance(func,tuple):  
+        raise Exception("Argument to 'call/cc' must be a non-builtin function")
+    cc = { 0: current_generator }
+    call = [cc, [ [func, [cc,None]], None ] ]   # (cc (func cc))
+    yield evaluate(call, None)  # let dispatcher switch generators to evaluate this
+    # when dispatcher switches back to this continuation, resume caller
+    return cc[1]
+
 setglobalvalue(getsymbol("null?"), builtin_null)
 setglobalvalue(getsymbol("car"), builtin_car)
 setglobalvalue(getsymbol("cdr"), builtin_cdr)
@@ -237,20 +274,14 @@ setglobalvalue(getsymbol("+"), builtin_plus)
 setglobalvalue(getsymbol("-"), builtin_minus)
 setglobalvalue(getsymbol("<"), builtin_less)
 setglobalvalue(getsymbol("<="), builtin_lessequal)
+setglobalvalue(getsymbol(">"), builtin_greater)
+setglobalvalue(getsymbol(">="), builtin_greaterequal)
 setglobalvalue(getsymbol("not"), builtin_not)
 setglobalvalue(getsymbol("display"), builtin_display)
 setglobalvalue(getsymbol("newline"), builtin_newline)
-
-# predefined symbols used for syntax
-symbol_quote = getsymbol("quote")
-symbol_define = getsymbol("define")
-symbol_lambda = getsymbol("lambda")
-symbol_if = getsymbol("if")
-symbol_begin = getsymbol("begin")
-symbol_let = getsymbol("let")
-symbol_set = getsymbol("set!")
-symbol_eval = getsymbol("eval")
-symbol_callcc = getsymbol("call/cc")
+setglobalvalue(getsymbol("eval"), builtin_eval)
+setglobalvalue(getsymbol("call/cc"), builtin_callcc)
+setglobalvalue(getsymbol("call-with-current-continuation"), builtin_callcc)
 
 # evaluation of a top-level element
 # it is only here, that define is allowed
@@ -260,7 +291,7 @@ def evaluate_toplevel(v):
         if isinstance(tail,list) and isinstance(tail[1],list):
             p0 = tail[0]
             if isinstance(p0, int):     # define a global symbol
-                setglobalvalue(p0, evaluate(tail[1][0], None))
+                setglobalvalue(p0, dispatch_evaluation(tail[1][0]))
                 return None
             elif isinstance(p0, list) and isinstance(p0[0],int):   # define a symbol as a function 
                 arguments = []
@@ -275,15 +306,26 @@ def evaluate_toplevel(v):
                     return None
         raise Exception("Wrong syntax for 'define'")
     else:
-        return evaluate(v, None)
-
-# simple evaluation (no continuations yet)
+        return dispatch_evaluation(v)
+        
+# do a complete evaluation execution, providing the bridge to the generator part  
+def dispatch_evaluation(v):
+    global current_generator
+    current_generator = evaluate(v,None)
+    try:
+        # work through generators as requested by the computation run
+        while True:
+            current_generator = current_generator.__next__()
+    except StopIteration as e:
+        return e.value
+    
+# evaluation using generators to implement continuations
 # the environment is either None, or a tuple of 3 elements:
 #   list of arguments (symbols)
 #   list of parameters (values)
 #   link to outer environment, or None
 def evaluate(v, environment):
-    # use loop to avoid recursion in some cases. each iteration will always either
+    # use loop to avoid recursion in many cases. each iteration will always either
     # return from the function (with a value or an exception) or explicitely continue the loop
     while True:
         # symbol look-up, either local or global environments
@@ -295,7 +337,7 @@ def evaluate(v, environment):
                 else:
                     ev = ev[2]
             return getglobalvalue(v)
-        
+        # list evaluation
         elif isinstance(v,list):  
             head = v[0]
             tail = v[1]
@@ -321,21 +363,22 @@ def evaluate(v, environment):
             elif head is symbol_if:
                 if not (isinstance(tail,list) and isinstance(tail[1],list)):
                     raise Exception("Wrong syntax for 'if'")
-                if not (evaluate(tail[0],environment) is False):
-                    v = tail[1][0]
-                    continue
+                r = yield from evaluate(tail[0],environment)
+                if not (r is False):
+                    v = tail[1][0]     
+                    continue    # proper tail-end recursion
                 elif isinstance(tail[1][1], list):
-                    v = tail[1][1][0]
-                    continue
+                    v = tail[1][1][0]  
+                    continue    # proper tail-end recursion
                 else:
                     return None
             elif head is symbol_begin:
                 if isinstance(tail,list):
                     while isinstance(tail[1],list): # not yet reached the last expression
-                        evaluate(tail[0],environment)
+                        yield from evaluate(tail[0],environment)
                         tail = tail[1]
-                    v = tail[0]   # evaluate last without recursion
-                    continue
+                    v = tail[0]  
+                    continue     # proper tail-end recursion
                 else:
                     raise Exception("Wrong syntax for 'begin'")
             elif head is symbol_let:
@@ -349,20 +392,20 @@ def evaluate(v, environment):
                     if not (isinstance(vardef, list) and isinstance(vardef[0],int) and isinstance(vardef[1],list)):
                         raise Exception("Wrong syntax for variable block in 'let'")
                     parameters.append(vardef[0])
-                    arguments.append(evaluate(vardef[1][0], environment))
+                    r = yield from evaluate(vardef[1][0], environment)
+                    arguments.append(r)
                     varlist = varlist[1]
                 environment = (parameters, arguments, environment)
                 tail = tail[1]
                 while isinstance(tail[1],list): # not yet reached the last expression
-                    evaluate(tail[0],environment)
+                    yield from evaluate(tail[0],environment)
                     tail = tail[1]
-                # do tail-end recursion
-                v = tail[0]
-                continue
+                v = tail[0]  
+                continue      # proper tail-end recursion
             elif head is symbol_set:
                 if not (isinstance(tail,list) and isinstance(tail[0],int) and isinstance(tail[1],list)):
                     raise Exception("Wrong syntax for 'set!'")
-                v = evaluate(tail[1][0], environment)   # do evaluation, no matter if symbol can be set
+                v = yield from evaluate(tail[1][0], environment)   # do evaluation, no matter if symbol can be set
                 # symbol lookup in local environments
                 sym = tail[0]
                 ev = environment
@@ -375,37 +418,41 @@ def evaluate(v, environment):
                 getglobalvalue(sym)   # check for existance (raise exception otherwise)
                 setglobalvalue(sym, v)
                 return v
-            elif head is symbol_eval:
-                if not (isinstance(tail,list) and tail[1] is None):
-                    raise Exception("Wrong syntax for 'eval'")
-                v = evaluate(tail[0], environment)
-                environment = None
-                continue
-            elif head is symbol_callcc:
-                raise Exception("'call/cc' not implemented yet")
             # some function call                
             else:  
-                func = evaluate(head, environment)
+                func = yield from evaluate(head, environment)
                 arguments = []
                 while isinstance(tail, list):
-                    arguments.append(evaluate(tail[0],environment))
+                    r = yield from evaluate(tail[0],environment)
+                    arguments.append(r)
                     tail = tail[1]
                 if isinstance(func,types.FunctionType): # built-in function
-                    return func(arguments)
+                    r = func(arguments)
+                    if isinstance(r,types.GeneratorType):
+                        r = yield from r
+                    return r
                 elif isinstance(func,tuple): # lambda function
                     if len(func[0]) != len(arguments):
                         raise Exception("Number of parameters does not match")
                     environment = func[2]    # use environment of the function definition
                     if len(arguments)>0:  # when having parameters, extend the environment
                         environment = (func[0], arguments, environment)
-                    # evaluate all expressions in function and return result of last                    
                     tail = func[1]
                     while isinstance(tail[1],list): # not yet reached the last expression
-                        evaluate(tail[0],environment)
+                        yield from evaluate(tail[0],environment)
                         tail = tail[1]
-                    # do tail-end recursion
                     v = tail[0]
-                    continue
+                    continue     # proper tail-end recursion
+                elif isinstance(func,dict):  # continuation                    
+                    if 1 in func: # continuation was already used
+                        return func[1]
+                    else:
+                        if len(arguments)>0:
+                            func[1] = arguments[0]  # keep as result for later return
+                        else:
+                            func[1] = None
+                        yield func[0]
+                    raise Exception("Generator continues after switching to other generator")
                 else:
                     raise Exception("Calling non-procedure")
         # eveything else just evaluates to itself
@@ -423,11 +470,8 @@ while True:
         break;
     try:
         r = evaluate_toplevel(v)
-        if r is None and isinstance(v,list) and v[0] is symbol_define:
-            pass    # do not write result of define
-        else:
+        if not (r is None):
             writevalue(r)
             print()
     except Exception as e:
-#        traceback.print_tb(e.__traceback__)
         print(e)    
