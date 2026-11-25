@@ -343,23 +343,22 @@ def evaluate(v, environment):
             tail = v[1]
             # some syntax contructs start with a hardcoded symbol
             if head is symbol_quote:
-                if isinstance(tail,list) and tail[1] is None:
-                    return tail[0]
-                raise Exception("Wrong syntax for 'quote'")
+                if not (isinstance(tail,list) and tail[1] is None):
+                    raise Exception("Wrong syntax for 'quote'")
+                return tail[0]
             elif head is symbol_define:
                 raise Exception("Can only define at top level")
             elif head is symbol_lambda:   # define a lambda function
-                if isinstance(tail,list) and isinstance(tail[1],list):
-                    arguments = []
-                    arem = tail[0]
-                    while isinstance(arem,list):
-                        if not isinstance(arem[0],int):
-                            raise Exception("Argument not a symbol")
-                        arguments.append(arem[0])
-                        arem = arem[1]
-                    if isinstance(tail[1], list):
-                        return ( arguments, tail[1], environment )
-                raise Exception("Wrong syntax for 'lambda'")
+                if not(isinstance(tail,list) and isinstance(tail[1],list)):
+                    raise Exception("Wrong syntax for 'lambda'")
+                arguments = []
+                arem = tail[0]
+                while isinstance(arem,list):
+                    if not isinstance(arem[0],int):
+                        raise Exception("Argument not a symbol")
+                    arguments.append(arem[0])
+                    arem = arem[1]
+                return ( arguments, tail[1], environment )
             elif head is symbol_if:
                 if not (isinstance(tail,list) and isinstance(tail[1],list)):
                     raise Exception("Wrong syntax for 'if'")
@@ -373,14 +372,13 @@ def evaluate(v, environment):
                 else:
                     return None
             elif head is symbol_begin:
-                if isinstance(tail,list):
-                    while isinstance(tail[1],list): # not yet reached the last expression
-                        yield from evaluate(tail[0],environment)
-                        tail = tail[1]
-                    v = tail[0]  
-                    continue     # proper tail-end recursion
-                else:
+                if not isinstance(tail,list):
                     raise Exception("Wrong syntax for 'begin'")
+                while isinstance(tail[1],list): # not yet reached the last expression
+                    yield from evaluate(tail[0],environment)
+                    tail = tail[1]
+                v = tail[0]  
+                continue     # proper tail-end recursion
             elif head is symbol_let:
                 if not (isinstance(tail,list) and isinstance(tail[1],list)):
                     raise Exception("Wrong syntax for 'let'")
