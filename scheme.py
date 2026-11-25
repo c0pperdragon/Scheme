@@ -1,6 +1,7 @@
 import sys
 import types
 from collections import deque 
+import traceback
 
 # dictionary to keep symbols
 symbols = dict()  # identifier -> int
@@ -18,18 +19,31 @@ def getsymbol(identifier):
 # global data storage for symbol values
 globalcontext = []  # int -> value 
 
-def getglobalvalue(symbol):
-    if symbol>=len(globalcontext):
-        raise Exception("Undefined symbol: "+identifiers[symbol])
-    v = globalcontext[symbol]
-    if v is globalcontext:
-        raise Exception("Undefined symbol: "+identifiers[symbol])
-    return v
-    
-def setglobalvalue(symbol,v):
-    while symbol>=len(globalcontext):
-        globalcontext.append(globalcontext)  # use the list itself to denote undefined value
+def defineglobalvalue(symbol, v):
+    while len(globalcontext)<=symbol:
+        globalcontext.append(globalcontext)
     globalcontext[symbol] = v
+    
+def getvalue(symbol, environment):
+    while not (environment is None):
+        if symbol in environment[0]:
+            return environment[1][environment[0].index(symbol)]
+        else:
+            environment = environment[2]
+    if symbol>=len(globalcontext) or (globalcontext[symbol] is globalcontext):
+        raise Exception("Undefined symbol: "+identifiers[symbol])
+    return globalcontext[symbol]
+    
+def setvalue(symbol,v,environment):
+    while not (environment is None):
+        if symbol in environment[0]:
+            environment[1][environment[0].index(symbol)] = v
+            return
+        else:
+            environment = environment[2]
+    if symbol>=len(globalcontext) or (globalcontext[symbol] is globalcontext):
+        raise Exception("Undefined symbol: "+identifiers[symbol])
+    globalcontext[symbol]=v
 
 # facility to read scheme data from the input
 readbuffer = deque()     # buffers the input broken into strings
@@ -264,24 +278,24 @@ def builtin_callcc(arguments):
     # when dispatcher switches back to this continuation, resume caller
     return cc[1]
 
-setglobalvalue(getsymbol("null?"), builtin_null)
-setglobalvalue(getsymbol("car"), builtin_car)
-setglobalvalue(getsymbol("cdr"), builtin_cdr)
-setglobalvalue(getsymbol("cons"), builtin_cons)
-setglobalvalue(getsymbol("list"), builtin_list)
-setglobalvalue(getsymbol("append"), builtin_append)
-setglobalvalue(getsymbol("+"), builtin_plus)
-setglobalvalue(getsymbol("-"), builtin_minus)
-setglobalvalue(getsymbol("<"), builtin_less)
-setglobalvalue(getsymbol("<="), builtin_lessequal)
-setglobalvalue(getsymbol(">"), builtin_greater)
-setglobalvalue(getsymbol(">="), builtin_greaterequal)
-setglobalvalue(getsymbol("not"), builtin_not)
-setglobalvalue(getsymbol("display"), builtin_display)
-setglobalvalue(getsymbol("newline"), builtin_newline)
-setglobalvalue(getsymbol("eval"), builtin_eval)
-setglobalvalue(getsymbol("call/cc"), builtin_callcc)
-setglobalvalue(getsymbol("call-with-current-continuation"), builtin_callcc)
+defineglobalvalue(getsymbol("null?"), builtin_null)
+defineglobalvalue(getsymbol("car"), builtin_car)
+defineglobalvalue(getsymbol("cdr"), builtin_cdr)
+defineglobalvalue(getsymbol("cons"), builtin_cons)
+defineglobalvalue(getsymbol("list"), builtin_list)
+defineglobalvalue(getsymbol("append"), builtin_append)
+defineglobalvalue(getsymbol("+"), builtin_plus)
+defineglobalvalue(getsymbol("-"), builtin_minus)
+defineglobalvalue(getsymbol("<"), builtin_less)
+defineglobalvalue(getsymbol("<="), builtin_lessequal)
+defineglobalvalue(getsymbol(">"), builtin_greater)
+defineglobalvalue(getsymbol(">="), builtin_greaterequal)
+defineglobalvalue(getsymbol("not"), builtin_not)
+defineglobalvalue(getsymbol("display"), builtin_display)
+defineglobalvalue(getsymbol("newline"), builtin_newline)
+defineglobalvalue(getsymbol("eval"), builtin_eval)
+defineglobalvalue(getsymbol("call/cc"), builtin_callcc)
+defineglobalvalue(getsymbol("call-with-current-continuation"), builtin_callcc)
 
 # evaluation of a top-level element
 # it is only here, that define is allowed
@@ -291,7 +305,7 @@ def evaluate_toplevel(v):
         if isinstance(tail,list) and isinstance(tail[1],list):
             p0 = tail[0]
             if isinstance(p0, int):     # define a global symbol
-                setglobalvalue(p0, dispatch_evaluation(tail[1][0]))
+                defineglobalvalue(p0, dispatch_evaluation(tail[1][0]))
                 return None
             elif isinstance(p0, list) and isinstance(p0[0],int):   # define a symbol as a function 
                 arguments = []
@@ -302,7 +316,7 @@ def evaluate_toplevel(v):
                     arguments.append(arem[0])
                     arem = arem[1]
                 if isinstance(tail[1],list):
-                    setglobalvalue(p0[0], ( arguments, tail[1], None ) )                    
+                    defineglobalvalue(p0[0], ( arguments, tail[1], None ) )                    
                     return None
         raise Exception("Wrong syntax for 'define'")
     else:
@@ -325,137 +339,113 @@ def dispatch_evaluation(v):
 #   list of parameters (values)
 #   link to outer environment, or None
 def evaluate(v, environment):
-    # use loop to avoid recursion in many cases. each iteration will always either
-    # return from the function (with a value or an exception) or explicitely continue the loop
+    # to avoid many recusions, some goto's would be very convenient
+    # in lack of goto, use some while's to have 2 branch targets
     while True:
-        # symbol look-up, either local or global environments
-        if isinstance(v,int):    
-            ev = environment
-            while not (ev is None):
-                if v in ev[0]:
-                    return ev[1][ev[0].index(v)]
-                else:
-                    ev = ev[2]
-            return getglobalvalue(v)
-        # list evaluation
-        elif isinstance(v,list):  
-            head = v[0]
-            tail = v[1]
-            # some syntax contructs start with a hardcoded symbol
-            if head is symbol_quote:
-                if not (isinstance(tail,list) and tail[1] is None):
-                    raise Exception("Wrong syntax for 'quote'")
-                return tail[0]
-            elif head is symbol_define:
-                raise Exception("Can only define at top level")
-            elif head is symbol_lambda:   # define a lambda function
-                if not(isinstance(tail,list) and isinstance(tail[1],list)):
-                    raise Exception("Wrong syntax for 'lambda'")
-                arguments = []
-                arem = tail[0]
-                while isinstance(arem,list):
-                    if not isinstance(arem[0],int):
-                        raise Exception("Argument not a symbol")
-                    arguments.append(arem[0])
-                    arem = arem[1]
-                return ( arguments, tail[1], environment )
-            elif head is symbol_if:
-                if not (isinstance(tail,list) and isinstance(tail[1],list)):
-                    raise Exception("Wrong syntax for 'if'")
-                r = yield from evaluate(tail[0],environment)
-                if not (r is False):
-                    v = tail[1][0]     
-                    continue    # proper tail-end recursion
-                elif isinstance(tail[1][1], list):
-                    v = tail[1][1][0]  
-                    continue    # proper tail-end recursion
-                else:
+        while True: # branch target (reached with 'continue' from everywhere)
+            # symbol look-up, either local or global environments
+            if isinstance(v,int):
+                return getvalue(v,environment)
+            # list evaluation
+            elif isinstance(v,list):  
+                head = v[0]
+                tail = v[1]
+                # some syntax contructs start with a hardcoded symbol
+                if head is symbol_quote:
+                    if not (isinstance(tail,list) and tail[1] is None):
+                        raise Exception("Wrong syntax for 'quote'")
+                    return tail[0]
+                elif head is symbol_lambda:   # define a lambda function
+                    if not(isinstance(tail,list) and isinstance(tail[1],list)):
+                        raise Exception("Wrong syntax for 'lambda'")
+                    arguments = []
+                    arem = tail[0]
+                    while isinstance(arem,list):
+                        if not isinstance(arem[0],int):
+                            raise Exception("Argument not a symbol")
+                        arguments.append(arem[0])
+                        arem = arem[1]
+                    return ( arguments, tail[1], environment )
+                elif head is symbol_if:
+                    if not (isinstance(tail,list) and isinstance(tail[1],list)):
+                        raise Exception("Wrong syntax for 'if'")
+                    v = yield from evaluate(tail[0],environment)
+                    if not (v is False):
+                        v = tail[1][0]     
+                        continue    # proper tail-end recursion
+                    elif isinstance(tail[1][1], list):
+                        v = tail[1][1][0]  
+                        continue    # proper tail-end recursion
+                    else:
+                        return None
+                elif head is symbol_begin:
+                    if not isinstance(tail,list):
+                        raise Exception("Wrong syntax for 'begin'")
+                    v = tail
+                    break
+                elif head is symbol_let:
+                    if not (isinstance(tail,list) and isinstance(tail[1],list)):
+                        raise Exception("Wrong syntax for 'let'")
+                    varlist = tail[0]
+                    parameters = []
+                    arguments = []
+                    while isinstance(varlist, list):
+                        vardef = varlist[0]
+                        if not (isinstance(vardef, list) and isinstance(vardef[0],int) and isinstance(vardef[1],list)):
+                            raise Exception("Wrong syntax for variable block in 'let'")
+                        parameters.append(vardef[0])
+                        v = yield from evaluate(vardef[1][0], environment)
+                        arguments.append(v)
+                        varlist = varlist[1]
+                    environment = (parameters, arguments, environment)
+                    v = tail[1]
+                    break
+                elif head is symbol_set:
+                    if not (isinstance(tail,list) and isinstance(tail[0],int) and isinstance(tail[1],list)):
+                        raise Exception("Wrong syntax for 'set!'")
+                    v = yield from evaluate(tail[1][0], environment)   
+                    setvalue(tail[0], v, environment)
                     return None
-            elif head is symbol_begin:
-                if not isinstance(tail,list):
-                    raise Exception("Wrong syntax for 'begin'")
-                while isinstance(tail[1],list): # not yet reached the last expression
-                    yield from evaluate(tail[0],environment)
-                    tail = tail[1]
-                v = tail[0]  
-                continue     # proper tail-end recursion
-            elif head is symbol_let:
-                if not (isinstance(tail,list) and isinstance(tail[1],list)):
-                    raise Exception("Wrong syntax for 'let'")
-                varlist = tail[0]
-                parameters = []
-                arguments = []
-                while isinstance(varlist, list):
-                    vardef = varlist[0]
-                    if not (isinstance(vardef, list) and isinstance(vardef[0],int) and isinstance(vardef[1],list)):
-                        raise Exception("Wrong syntax for variable block in 'let'")
-                    parameters.append(vardef[0])
-                    r = yield from evaluate(vardef[1][0], environment)
-                    arguments.append(r)
-                    varlist = varlist[1]
-                environment = (parameters, arguments, environment)
-                tail = tail[1]
-                while isinstance(tail[1],list): # not yet reached the last expression
-                    yield from evaluate(tail[0],environment)
-                    tail = tail[1]
-                v = tail[0]  
-                continue      # proper tail-end recursion
-            elif head is symbol_set:
-                if not (isinstance(tail,list) and isinstance(tail[0],int) and isinstance(tail[1],list)):
-                    raise Exception("Wrong syntax for 'set!'")
-                v = yield from evaluate(tail[1][0], environment)   # do evaluation, no matter if symbol can be set
-                # symbol lookup in local environments
-                sym = tail[0]
-                ev = environment
-                while not (ev is None):
-                    if sym in ev[0]:
-                        ev[1][ev[0].index(sym)] = v
-                        return v
-                    else:
-                        ev = ev[2]
-                getglobalvalue(sym)   # check for existance (raise exception otherwise)
-                setglobalvalue(sym, v)
-                return v
-            # some function call                
-            else:  
-                func = yield from evaluate(head, environment)
-                arguments = []
-                while isinstance(tail, list):
-                    r = yield from evaluate(tail[0],environment)
-                    arguments.append(r)
-                    tail = tail[1]
-                if isinstance(func,types.FunctionType): # built-in function
-                    r = func(arguments)
-                    if isinstance(r,types.GeneratorType):
-                        r = yield from r
-                    return r
-                elif isinstance(func,tuple): # lambda function
-                    if len(func[0]) != len(arguments):
-                        raise Exception("Number of parameters does not match")
-                    environment = func[2]    # use environment of the function definition
-                    if len(arguments)>0:  # when having parameters, extend the environment
-                        environment = (func[0], arguments, environment)
-                    tail = func[1]
-                    while isinstance(tail[1],list): # not yet reached the last expression
-                        yield from evaluate(tail[0],environment)
+                # some function call                
+                else:  
+                    func = yield from evaluate(head, environment)
+                    arguments = []
+                    while isinstance(tail, list):
+                        v = yield from evaluate(tail[0],environment)
+                        arguments.append(v)
                         tail = tail[1]
-                    v = tail[0]
-                    continue     # proper tail-end recursion
-                elif isinstance(func,dict):  # continuation                    
-                    if 1 in func: # continuation was already used
-                        return func[1]
-                    else:
-                        if len(arguments)>0:
-                            func[1] = arguments[0]  # keep as result for later return
+                    if isinstance(func,types.FunctionType): # built-in function
+                        v = func(arguments)
+                        if isinstance(v,types.GeneratorType):
+                            v = yield from v
+                        return v
+                    elif isinstance(func,tuple): # lambda function
+                        if len(func[0]) != len(arguments):
+                            raise Exception("Number of parameters does not match")
+                        environment = func[2]    # use environment of the function definition
+                        if len(arguments)>0:  # when having parameters, extend the environment
+                            environment = (func[0], arguments, environment)
+                        v = func[1]
+                        break
+                    elif isinstance(func,dict):  # continuation                    
+                        if 1 in func: # continuation was already used
+                            return func[1]
                         else:
-                            func[1] = None
-                        yield func[0]
-                    raise Exception("Generator continues after switching to other generator")
-                else:
-                    raise Exception("Calling non-procedure")
-        # eveything else just evaluates to itself
-        else:
-            return v
+                            func[1] = arguments[0] if len(arguments)>0 else None
+                            yield func[0]
+                        raise Exception("Generator continued after switching to other generator")
+                    else:
+                        raise Exception("Calling non-procedure")
+            # everything else just evaluates to itself
+            else:
+                return v
+        # this branch target can be reached from inner loop with break
+        # here, v must be a list, all elements are evaluated and the last result is the overall result
+        while isinstance(v[1],list): # not yet reached the last expression
+            yield from evaluate(v[0],environment)
+            v = v[1]
+        v = v[0]
+        continue     # proper tail-end recursion
         
 # main program
 if len(sys.argv)>1:
@@ -473,3 +463,4 @@ while True:
             print()
     except Exception as e:
         print(e)    
+        # traceback.print_tb(e.__traceback__)
