@@ -18,7 +18,7 @@ symbol             | int
 pair               | list: [car, cdr]
 built-in function  | function
 lambda             | tuple: (arguments, list of expressions, environment)
-continuation       | dict: { 0:generator, 1:result }
+continuation       | dict
 
 ## Challenges
 

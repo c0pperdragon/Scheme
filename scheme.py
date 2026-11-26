@@ -3,6 +3,24 @@ import types
 from collections import deque 
 import traceback
 
+def main():
+    if len(sys.argv)>1:
+        with open(sys.argv[1]) as fp:
+            for line in fp:
+                add_to_buffer(line)
+    while True:
+        v = readvalue()
+        if v==None:
+            break;
+        try:
+            r = evaluate_toplevel(v)
+            if not (r is None):
+                writevalue(r)
+                print()
+        except Exception as e:
+            print(e)    
+            traceback.print_tb(e.__traceback__)
+
 # dictionary to keep symbols
 symbols = dict()  # identifier -> int
 identifiers = []  # int -> identifier
@@ -143,14 +161,6 @@ def writevalue(v):
     else:                      # unknown
         print("?",v, end="")
                     
-# predefined symbols used for syntax
-symbol_quote = getsymbol("quote")
-symbol_define = getsymbol("define")
-symbol_lambda = getsymbol("lambda")
-symbol_if = getsymbol("if")
-symbol_begin = getsymbol("begin")
-symbol_let = getsymbol("let")
-symbol_set = getsymbol("set!")
 
 # built-in functions
 def builtin_null(arguments):
@@ -262,21 +272,9 @@ def builtin_newline(arguments):
         raise Exception("Wrong number of arguments for 'newline'")
     print()
 def builtin_eval(arguments): 
-    if len(arguments)!=1:
-        raise Exception("Wrong number of arguments for 'eval'")
-    r = yield from evaluate(arguments[0], None)
-    return r
+    raiseException("needs to be implemented in evaluation engine")
 def builtin_callcc(arguments):
-    if len(arguments)!=1:
-        raise Exception("Wrong number of arguments for 'call/cc'")
-    func = arguments[0]
-    if not isinstance(func,tuple):  
-        raise Exception("Argument to 'call/cc' must be a non-builtin function")
-    cc = { 0: current_generator }
-    call = [cc, [ [func, [cc,None]], None ] ]   # (cc (func cc))
-    yield evaluate(call, None)  # let dispatcher switch generators to evaluate this
-    # when dispatcher switches back to this continuation, resume caller
-    return cc[1]
+    raiseException("needs to be implemented in evaluation engine")
 
 defineglobalvalue(getsymbol("null?"), builtin_null)
 defineglobalvalue(getsymbol("car"), builtin_car)
@@ -297,6 +295,15 @@ defineglobalvalue(getsymbol("eval"), builtin_eval)
 defineglobalvalue(getsymbol("call/cc"), builtin_callcc)
 defineglobalvalue(getsymbol("call-with-current-continuation"), builtin_callcc)
 
+# predefined symbols used for syntax
+symbol_quote = getsymbol("quote")
+symbol_define = getsymbol("define")
+symbol_lambda = getsymbol("lambda")
+symbol_if = getsymbol("if")
+symbol_begin = getsymbol("begin")
+symbol_let = getsymbol("let")
+symbol_set = getsymbol("set!")
+
 # evaluation of a top-level element
 # it is only here, that define is allowed
 def evaluate_toplevel(v):
@@ -305,27 +312,32 @@ def evaluate_toplevel(v):
         if isinstance(tail,list) and isinstance(tail[1],list):
             p0 = tail[0]
             if isinstance(p0, int):     # define a global symbol
-                defineglobalvalue(p0, dispatch_evaluation(tail[1][0]))
+                defineglobalvalue(p0, evaluate(tail[1][0]))
                 return None
             elif isinstance(p0, list) and isinstance(p0[0],int):   # define a symbol as a function 
-                arguments = []
-                arem = p0[1]
-                while isinstance(arem,list):
-                    if not isinstance(arem[0],int):
-                        raise Exception("Argument not a symbol")
-                    arguments.append(arem[0])
-                    arem = arem[1]
-                if isinstance(tail[1],list):
-                    defineglobalvalue(p0[0], ( arguments, tail[1], None ) )                    
-                    return None
-        raise Exception("Wrong syntax for 'define'")
+                defineglobalvalue(p0[0], create_function( p0[1], tail[1], None))
+                return None
+            else:
+                raise Exception("Wrong syntax for 'define'")
     else:
-        return dispatch_evaluation(v)
+        return evaluate(v)
         
-# do a complete evaluation execution, providing the bridge to the generator part  
-def dispatch_evaluation(v):
+# toolbox function to create a scheme function object
+def create_function(parameterlist, code, environment):
+    parameters = []
+    while isinstance(parameterlist,list):
+        if not isinstance(parameterlist[0],int):
+            raise Exception("Parameter not a symbol")
+        parameters.append(parameterlist[0])
+        parameterlist = parameterlist[1]
+    if not isinstance(code, list):
+        raise Exception("Function body must not be empty")
+    return ( parameters, code, environment )                     
+        
+# evaluation implementation that uses generator functions  
+def evaluate_with_generators(v):
     global current_generator
-    current_generator = evaluate(v,None)
+    current_generator = ev_g(v,None)
     try:
         # work through generators as requested by the computation run
         while True:
@@ -338,9 +350,9 @@ def dispatch_evaluation(v):
 #   list of arguments (symbols)
 #   list of parameters (values)
 #   link to outer environment, or None
-def evaluate(v, environment):
+def ev_g(v, environment):
     # to avoid many recusions, some goto's would be very convenient
-    # in lack of goto, use some while's to have 2 branch targets
+    # in lack of goto, use some while's to have 2 'goto' targets
     while True:
         while True: # branch target (reached with 'continue' from everywhere)
             # symbol look-up, either local or global environments
@@ -358,18 +370,11 @@ def evaluate(v, environment):
                 elif head is symbol_lambda:   # define a lambda function
                     if not(isinstance(tail,list) and isinstance(tail[1],list)):
                         raise Exception("Wrong syntax for 'lambda'")
-                    arguments = []
-                    arem = tail[0]
-                    while isinstance(arem,list):
-                        if not isinstance(arem[0],int):
-                            raise Exception("Argument not a symbol")
-                        arguments.append(arem[0])
-                        arem = arem[1]
-                    return ( arguments, tail[1], environment )
+                    return create_function(tail[0], tail[1], environment)
                 elif head is symbol_if:
                     if not (isinstance(tail,list) and isinstance(tail[1],list)):
                         raise Exception("Wrong syntax for 'if'")
-                    v = yield from evaluate(tail[0],environment)
+                    v = yield from ev_g(tail[0],environment)
                     if not (v is False):
                         v = tail[1][0]     
                         continue    # proper tail-end recursion
@@ -382,7 +387,7 @@ def evaluate(v, environment):
                     if not isinstance(tail,list):
                         raise Exception("Wrong syntax for 'begin'")
                     v = tail
-                    break
+                    break    # evaluate the whole list
                 elif head is symbol_let:
                     if not (isinstance(tail,list) and isinstance(tail[1],list)):
                         raise Exception("Wrong syntax for 'let'")
@@ -394,31 +399,40 @@ def evaluate(v, environment):
                         if not (isinstance(vardef, list) and isinstance(vardef[0],int) and isinstance(vardef[1],list)):
                             raise Exception("Wrong syntax for variable block in 'let'")
                         parameters.append(vardef[0])
-                        v = yield from evaluate(vardef[1][0], environment)
+                        v = yield from ev_g(vardef[1][0], environment)
                         arguments.append(v)
                         varlist = varlist[1]
                     environment = (parameters, arguments, environment)
                     v = tail[1]
-                    break
+                    break    # evaluate the whole list
                 elif head is symbol_set:
                     if not (isinstance(tail,list) and isinstance(tail[0],int) and isinstance(tail[1],list)):
                         raise Exception("Wrong syntax for 'set!'")
-                    v = yield from evaluate(tail[1][0], environment)   
+                    v = yield from ev_g(tail[1][0], environment)   
                     setvalue(tail[0], v, environment)
                     return None
-                # some function call                
+                # other functions evaluate all parameters before the call                
                 else:  
-                    func = yield from evaluate(head, environment)
+                    func = yield from ev_g(head, environment)
                     arguments = []
                     while isinstance(tail, list):
-                        v = yield from evaluate(tail[0],environment)
+                        v = yield from ev_g(tail[0],environment)
                         arguments.append(v)
                         tail = tail[1]
-                    if isinstance(func,types.FunctionType): # built-in function
-                        v = func(arguments)
-                        if isinstance(v,types.GeneratorType):
-                            v = yield from v
-                        return v
+                    if func is builtin_eval:    # built-in functions with special handling
+                        if len(arguments)!=1:
+                            raise Exeption("'eval' expects 1 argument")
+                        v = arguments[0]
+                        continue
+                    elif func is builtin_callcc:
+                        if len(arguments)!=1:
+                            raise Exception("Wrong number of arguments for 'call/cc'")
+                        cc = { 0: current_generator }
+                        call = [cc, [ [arguments[0], [cc,None]], None ] ]   # (cc (func cc))
+                        yield ev_g(call, None)  # let dispatcher switch generators to evaluate this
+                        return None
+                    elif isinstance(func,types.FunctionType): # built-in function
+                        return func(arguments)
                     elif isinstance(func,tuple): # lambda function
                         if len(func[0]) != len(arguments):
                             raise Exception("Number of parameters does not match")
@@ -426,41 +440,28 @@ def evaluate(v, environment):
                         if len(arguments)>0:  # when having parameters, extend the environment
                             environment = (func[0], arguments, environment)
                         v = func[1]
-                        break
-                    elif isinstance(func,dict):  # continuation                    
+                        break       # evaluate the whole list
+                    elif isinstance(func,dict):  # return to continuation                    
                         if 1 in func: # continuation was already used
                             return func[1]
                         else:
                             func[1] = arguments[0] if len(arguments)>0 else None
                             yield func[0]
-                        raise Exception("Generator continued after switching to other generator")
+                            return None
                     else:
                         raise Exception("Calling non-procedure")
             # everything else just evaluates to itself
             else:
                 return v
-        # this branch target can be reached from inner loop with break
+        # this branch target can be reached from inner loop with break.
         # here, v must be a list, all elements are evaluated and the last result is the overall result
         while isinstance(v[1],list): # not yet reached the last expression
-            yield from evaluate(v[0],environment)
+            yield from ev_g(v[0],environment)
             v = v[1]
         v = v[0]
         continue     # proper tail-end recursion
-        
-# main program
-if len(sys.argv)>1:
-    with open(sys.argv[1]) as fp:
-        for line in fp:
-            add_to_buffer(line)
-while True:
-    v = readvalue()
-    if v==None:
-        break;
-    try:
-        r = evaluate_toplevel(v)
-        if not (r is None):
-            writevalue(r)
-            print()
-    except Exception as e:
-        print(e)    
-        # traceback.print_tb(e.__traceback__)
+
+
+# decide on an evaluation engine
+evaluate = evaluate_with_generators  
+main()
