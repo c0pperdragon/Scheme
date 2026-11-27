@@ -15,12 +15,13 @@
 ( define (e x)
   (list 'e (b) ((lambda () (list 'lamba x)))) )
 ( define (test_environment)
-  ( let ((x 14) (y 7))
-    ( let ((x 3))    
-      (display (list 'inner_x  x 'inner_y y)) 
-      (newline) )
-    (display (list 'outer_x  x 'outer_y y)) 
-    (newline) ) )
+  ( with x 14 
+    ( with y 7
+      ( with x 3    
+        (display (list 'inner_x  x 'inner_y y)) 
+        (newline) )
+      (display (list 'outer_x  x 'outer_y y)) 
+      (newline) ) ) )
   
 (a 'argument-a)
 (b)

@@ -6,7 +6,7 @@
   '() )
 
 ( define (dequeue)
-  ( let ((executable (car pending)))
+  ( with executable (car pending)
     (set! pending (cdr pending))
     executable ) )
 
@@ -17,7 +17,7 @@
       (stop) ) ) )
 
 ( define (yield)
-  ( let ((executable (dequeue)))
+  ( with executable (dequeue)
     ( call/cc 
       ( lambda (cc)
         (enqueue cc)
@@ -36,12 +36,11 @@
 ( define (hanoi from to store amount)
   ( if (<= amount 0)
     0
-    ( begin 
-      (hanoi from store to (- amount 1))
-      (display (list from to))
-      (newline)
-      (yield)
-      (hanoi store to from (- amount 1)) ) ) )
+    (hanoi from store to (- amount 1))
+    (display (list from to))
+    (newline)
+    (yield)
+    (hanoi store to from (- amount 1)) ) ) 
       
 ; solve 3 instances of towers of hanoi in parallel
 (start (lambda () (hanoi 'X 'Y 'Z 2)))

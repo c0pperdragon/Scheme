@@ -29,3 +29,8 @@ but very powerful. I managed to get these things working:
 * Evaluate tail-end recursive constructs without recursion
 * Continuations with call/cc 
 
+## Restrictions
+
+To keep it simple, I do not implement many of the Scheme libraries, and 
+there is only one simple construct to define local variables ("with")
+instead of the 3 flavours of let.

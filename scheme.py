@@ -21,6 +21,12 @@ def main():
             print(e)    
             traceback.print_tb(e.__traceback__)
 
+# convenience 
+def PAIR(v):        # is something a scheme pair?
+    return isinstance(v,list)
+def SYMBOL(v):        # is something a scheme symbol? 
+    return isinstance(v,int)
+
 # dictionary to keep symbols
 symbols = dict()  # identifier -> int
 identifiers = []  # int -> identifier
@@ -131,11 +137,11 @@ def writevalue(v):
         print("#t", end="")
     elif v is False:
         print("#f", end="")
-    elif isinstance(v,list):   # pair (a.k.a. cons cell)
+    elif PAIR(v):      # list or dotted pair
         print("(", end="")
         writevalue(v[0])
         v=v[1]
-        while isinstance(v,list):
+        while PAIR(v):
             print(" ", end="")
             writevalue(v[0])
             v = v[1]
@@ -143,7 +149,7 @@ def writevalue(v):
             print(" . ", end="")
             writevalue(v)
         print(")", end="")
-    elif isinstance(v,int):    # symbol
+    elif SYMBOL(v):    # symbol
         print(identifiers[v], end="")
     elif isinstance(v,float):   # numeric
         if v.is_integer():
@@ -175,14 +181,14 @@ def builtin_car(arguments):
     if len(arguments)!=1:
         raise Exception("Wrong number of arguments for 'car'")
     p0 = arguments[0]
-    if not isinstance(p0,list):
+    if not PAIR(p0):
         raise Exception("Pair expected as argument for 'car'")
     return p0[0]
 def builtin_cdr(arguments):
     if len(arguments)!=1:
         raise Exception("Wrong number of arguments for 'cdr'")
     p0 = arguments[0]
-    if not isinstance(p0,list):
+    if not PAIR(p0):
         raise Exception("Pair expected as argument for 'cdr'")
     return p0[1]
 def builtin_cons(arguments):
@@ -201,7 +207,7 @@ def builtin_append(arguments):
     last = None
     for a in arguments[:-1]:
         l = a
-        while isinstance(l,list):
+        while PAIR(l):
             e = [l[0], None]
             l = l[1]                
             if totallist is None:
@@ -302,20 +308,33 @@ symbol_define = getsymbol("define")
 symbol_lambda = getsymbol("lambda")
 symbol_if = getsymbol("if")
 symbol_begin = getsymbol("begin")
-symbol_let = getsymbol("let")
+symbol_with = getsymbol("with")
 symbol_set = getsymbol("set!")
+
+    
+# toolbox function to create a scheme function object
+def create_function(parameterlist, code, environment):
+    parameters = []
+    while PAIR(parameterlist):
+        if not SYMBOL(parameterlist[0]):
+            raise Exception("Parameter not a symbol")
+        parameters.append(parameterlist[0])
+        parameterlist = parameterlist[1]
+    if not PAIR(code):
+        raise Exception("Function body must not be empty")
+    return ( parameters, code, environment )                     
 
 # evaluation of a top-level element
 # it is only here, that define is allowed
 def evaluate_toplevel(v):
-    if isinstance(v,list) and v[0] is symbol_define:
+    if PAIR(v) and v[0] is symbol_define:
         tail = v[1]
-        if isinstance(tail,list) and isinstance(tail[1],list):
+        if PAIR(tail) and PAIR(tail[1]):
             p0 = tail[0]
-            if isinstance(p0, int):     # define a global symbol
+            if SYMBOL(p0):     # define a global symbol
                 defineglobalvalue(p0, evaluate(tail[1][0]))
                 return None
-            elif isinstance(p0, list) and isinstance(p0[0],int):   # define a symbol as a function 
+            elif PAIR(p0) and SYMBOL(p0[0]):   # define a symbol as a function 
                 defineglobalvalue(p0[0], create_function( p0[1], tail[1], None))
                 return None
             else:
@@ -323,18 +342,6 @@ def evaluate_toplevel(v):
     else:
         return evaluate(v)
         
-# toolbox function to create a scheme function object
-def create_function(parameterlist, code, environment):
-    parameters = []
-    while isinstance(parameterlist,list):
-        if not isinstance(parameterlist[0],int):
-            raise Exception("Parameter not a symbol")
-        parameters.append(parameterlist[0])
-        parameterlist = parameterlist[1]
-    if not isinstance(code, list):
-        raise Exception("Function body must not be empty")
-    return ( parameters, code, environment )                     
-
         
 # evaluation implementation that uses generator functions  
 def evaluate_with_generators(v):
@@ -357,64 +364,56 @@ def ev_g(v, environment):
     # in lack of goto, use a loop and many continues 
     while True:
         # symbol look-up, either local or global environments
-        if isinstance(v,int):
+        if SYMBOL(v):
             return getvalue(v,environment)
         # list evaluation
-        elif isinstance(v,list):  
+        elif PAIR(v):  
             head = v[0]
             tail = v[1]
             # some syntax contructs start with a hardcoded symbol
             if head is symbol_quote:
-                if not (isinstance(tail,list) and tail[1] is None):
+                if not PAIR(tail):
                     raise Exception("Wrong syntax for 'quote'")
                 return tail[0]
             elif head is symbol_lambda:   # define a lambda function
-                if not(isinstance(tail,list) and isinstance(tail[1],list)):
+                if not(PAIR(tail) and PAIR(tail[1])):
                     raise Exception("Wrong syntax for 'lambda'")
                 return create_function(tail[0], tail[1], environment)
             elif head is symbol_begin:
-                if not isinstance(tail,list):
+                if not PAIR(tail):
                     raise Exception("Wrong syntax for 'begin'")
                 v = tail
                 pass     # no return/continue: evaluate the whole list
             elif head is symbol_if:
-                if not (isinstance(tail,list) and isinstance(tail[1],list)):
+                if not (PAIR(tail) and PAIR(tail[1])):
                     raise Exception("Wrong syntax for 'if'")
                 v = yield from ev_g(tail[0],environment)
                 if not (v is False):
                     v = tail[1][0]     
                     continue    # proper tail-end recursion
-                elif isinstance(tail[1][1], list):
-                    v = tail[1][1][0]  
-                    continue    # proper tail-end recursion
+                elif PAIR(tail[1][1]):
+                    v = tail[1][1]  
+                    pass     # evalute the whole trailing list 
                 else:
                     return None
             elif head is symbol_set:
-                if not (isinstance(tail,list) and isinstance(tail[0],int) and isinstance(tail[1],list)):
+                if not (PAIR(tail) and SYMBOL(tail[0]) and PAIR(tail[1])):
                     raise Exception("Wrong syntax for 'set!'")
                 v = yield from ev_g(tail[1][0], environment)   
                 setvalue(tail[0], v, environment)
                 return None
-            elif head is symbol_let:
-                if not (isinstance(tail,list) and isinstance(tail[1],list)):
-                    raise Exception("Wrong syntax for 'let'")
-                varlist = tail[0]
-                newenvironment = environment
-                while isinstance(varlist, list):
-                    vardef = varlist[0]
-                    if not (isinstance(vardef, list) and isinstance(vardef[0],int) and isinstance(vardef[1],list)):
-                        raise Exception("Wrong syntax for variable block in 'let'")
-                    v = yield from ev_g(vardef[1][0], environment)
-                    newenvironment = (varlist[0][0], v, newenvironment)
-                    varlist = varlist[1]
-                environment = newenvironment
-                v = tail[1]   
+            elif head is symbol_with:
+                if not (PAIR(tail) and SYMBOL(tail[0]) and PAIR(tail[1]) and PAIR(tail[1][1]) ):
+                    raise Exception("Wrong syntax for 'with'")
+                v = yield from ev_g(tail[1][0], environment)
+                environment = (tail[0], v, environment)
+                v = tail[1][1]
                 pass     # no return/continue: evaluate the whole list
             # other functions evaluate all parameters before the call                
             else:  
                 func = yield from ev_g(head, environment)
                 arguments = []
-                while isinstance(tail, list):
+                while PAIR(tail):
                     v = yield from ev_g(tail[0],environment)
                     arguments.append(v)
                     tail = tail[1]
@@ -452,7 +451,7 @@ def ev_g(v, environment):
             # this position can be reached from the big list evaluation if-clause
             # by just falling out at the end without continue or return.
             # here, v must be a list, all elements are evaluated and the last result is the overall result
-            while isinstance(v[1],list): # not yet reached the last expression
+            while PAIR(v[1]): # not yet reached the last expression
                 yield from ev_g(v[0],environment)
                 v = v[1]
             v = v[0]
@@ -462,8 +461,7 @@ def ev_g(v, environment):
             return v
 
 
-
-# implementation with an external stack, completely contained in a single function
+# implementation with an explicit stack, completely contained in a single function
 def evaluate_without_recursion(v):
     environment = None 
     s = [0]  # stack structure used by operations to know where to continue  
@@ -471,35 +469,35 @@ def evaluate_without_recursion(v):
     while l>0:  # run until hitting the prepared '0' on the stack
         if l==1:     # evaluate v and continue according to stack after that
             # symbol look-up, either local or global environments
-            if isinstance(v,int):
+            if SYMBOL(v):
                 v = getvalue(v,environment)
                 l = s.pop()
                 continue                
             # list evaluation
-            elif isinstance(v,list):  
+            elif PAIR(v):  
                 head = v[0]
                 tail = v[1]
                 # some syntax contructs start with a hardcoded symbol
                 if head is symbol_quote:
-                    if not (isinstance(tail,list) and tail[1] is None):
+                    if not PAIR(tail):
                         raise Exception("Wrong syntax for 'quote'")
                     v = tail[0]
                     l = s.pop() 
                     continue
                 elif head is symbol_lambda:   # define a lambda function
-                    if not(isinstance(tail,list) and isinstance(tail[1],list)):
+                    if not(PAIR(tail) and PAIR(tail[1])):
                         raise Exception("Wrong syntax for 'lambda'")
                     v = create_function(tail[0], tail[1], environment)
                     l = s.pop()
                     continue
                 elif head is symbol_begin:
-                    if not isinstance(tail,list):
+                    if not PAIR(tail):
                         raise Exception("Wrong syntax for 'begin'")
                     v = tail
                     l = 2
                     continue
                 elif head is symbol_if:   # if-clause 
-                    if not (isinstance(tail,list) and isinstance(tail[1],list)):
+                    if not (PAIR(tail) and PAIR(tail[1])):
                         raise Exception("Wrong syntax for 'if'")
                     s.append(tail[1]) # list containing the true and false branches
                     s.append(2)       # where to continue after evaluating condition
@@ -507,16 +505,16 @@ def evaluate_without_recursion(v):
                     l = 4
                     continue                    
                 elif head is symbol_set:
-                    if not (isinstance(tail,list) and isinstance(tail[0],int) and isinstance(tail[1],list)):
+                    if not (PAIR(tail) and SYMBOL(tail[0]) and PAIR(tail[1])):
                         raise Exception("Wrong syntax for 'set!'")
                     s.append(tail[0])  # the symbol that needs to be set
                     s.append(5)        # where to continue after evaluation
                     v = tail[1][0]
                     l = 1
                     continue
-                elif head is symbol_let:
-                    if not (isinstance(tail,list) and isinstance(tail[1],list)):
-                        raise Exception("Wrong syntax for 'let'")
+                elif head is symbol_with:
+                   if not (PAIR(tail) and SYMBOL(tail[0]) and PAIR(tail[1]) and PAIR(tail[1][1]) ):
+                    raise Exception("Wrong syntax for 'with'")
 ##                    varlist = tail[0]
 ##                    parameters = []
 ##                    arguments = []
@@ -541,7 +539,7 @@ def evaluate_without_recursion(v):
                 continue
                         
         elif l==2:     # evaluate all elements of a list in sequence, the last returns its value
-            if isinstance(v[1],list): # not yet reached the last expression                    
+            if PAIR(v[1]):    # not yet reached the last expression                    
                 s.append(v[1])  # memorize remainder of the list to evaluate
                 s.append(3)     # where to continue after evaluation
                 v = v[0]        # what to evaluate
@@ -561,7 +559,7 @@ def evaluate_without_recursion(v):
                 v = tail[0]     
                 l = 1
                 continue    # proper tail-end recursion
-            elif isinstance(tail[1], list):
+            elif PAIR(tail[1]):
                 v = tail[1][0]  
                 l = 1
                 continue    # proper tail-end recursion
@@ -574,7 +572,6 @@ def evaluate_without_recursion(v):
             setvalue(sym,v,environment)
             l = s.pop()
             continue
-
      # after encountering '0' on the continuation stack       
     return v
     
