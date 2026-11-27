@@ -41,11 +41,12 @@ def defineglobalvalue(symbol, v):
     while len(globalcontext)<=symbol:
         globalcontext.append(globalcontext)
     globalcontext[symbol] = v
-    
+
+# accessing variables from the current/parent environment or global storage
 def getvalue(symbol, environment):
     while not (environment is None):
-        if symbol in environment[0]:
-            return environment[1][environment[0].index(symbol)]
+        if symbol is environment[0]:
+            return environment[1]
         else:
             environment = environment[2]
     if symbol>=len(globalcontext) or (globalcontext[symbol] is globalcontext):
@@ -54,8 +55,8 @@ def getvalue(symbol, environment):
     
 def setvalue(symbol,v,environment):
     while not (environment is None):
-        if symbol in environment[0]:
-            environment[1][environment[0].index(symbol)] = v
+        if symbol is environment[0]:
+            environment[1] = v
             return
         else:
             environment = environment[2]
@@ -272,9 +273,9 @@ def builtin_newline(arguments):
         raise Exception("Wrong number of arguments for 'newline'")
     print()
 def builtin_eval(arguments): 
-    raiseException("needs to be implemented in evaluation engine")
+    raiseException("'eval' needs to be implemented in evaluation engine")
 def builtin_callcc(arguments):
-    raiseException("needs to be implemented in evaluation engine")
+    raiseException("'call/cc' needs to be implemented in evaluation engine")
 
 defineglobalvalue(getsymbol("null?"), builtin_null)
 defineglobalvalue(getsymbol("car"), builtin_car)
@@ -333,6 +334,7 @@ def create_function(parameterlist, code, environment):
     if not isinstance(code, list):
         raise Exception("Function body must not be empty")
     return ( parameters, code, environment )                     
+
         
 # evaluation implementation that uses generator functions  
 def evaluate_with_generators(v):
@@ -345,19 +347,134 @@ def evaluate_with_generators(v):
     except StopIteration as e:
         return e.value
     
-# evaluation using generators to implement continuations
+# evaluation using generators to implement the state machine
 # the environment is either None, or a tuple of 3 elements:
 #   list of arguments (symbols)
 #   list of parameters (values)
 #   link to outer environment, or None
 def ev_g(v, environment):
-    # to avoid many recusions, some goto's would be very convenient
-    # in lack of goto, use some while's to have 2 'goto' targets
+    # to avoid many recursions, some goto's would be very convenient
+    # in lack of goto, use a loop and many continues 
     while True:
-        while True: # branch target (reached with 'continue' from everywhere)
+        # symbol look-up, either local or global environments
+        if isinstance(v,int):
+            return getvalue(v,environment)
+        # list evaluation
+        elif isinstance(v,list):  
+            head = v[0]
+            tail = v[1]
+            # some syntax contructs start with a hardcoded symbol
+            if head is symbol_quote:
+                if not (isinstance(tail,list) and tail[1] is None):
+                    raise Exception("Wrong syntax for 'quote'")
+                return tail[0]
+            elif head is symbol_lambda:   # define a lambda function
+                if not(isinstance(tail,list) and isinstance(tail[1],list)):
+                    raise Exception("Wrong syntax for 'lambda'")
+                return create_function(tail[0], tail[1], environment)
+            elif head is symbol_begin:
+                if not isinstance(tail,list):
+                    raise Exception("Wrong syntax for 'begin'")
+                v = tail
+                pass     # no return/continue: evaluate the whole list
+            elif head is symbol_if:
+                if not (isinstance(tail,list) and isinstance(tail[1],list)):
+                    raise Exception("Wrong syntax for 'if'")
+                v = yield from ev_g(tail[0],environment)
+                if not (v is False):
+                    v = tail[1][0]     
+                    continue    # proper tail-end recursion
+                elif isinstance(tail[1][1], list):
+                    v = tail[1][1][0]  
+                    continue    # proper tail-end recursion
+                else:
+                    return None
+            elif head is symbol_set:
+                if not (isinstance(tail,list) and isinstance(tail[0],int) and isinstance(tail[1],list)):
+                    raise Exception("Wrong syntax for 'set!'")
+                v = yield from ev_g(tail[1][0], environment)   
+                setvalue(tail[0], v, environment)
+                return None
+            elif head is symbol_let:
+                if not (isinstance(tail,list) and isinstance(tail[1],list)):
+                    raise Exception("Wrong syntax for 'let'")
+                varlist = tail[0]
+                newenvironment = environment
+                while isinstance(varlist, list):
+                    vardef = varlist[0]
+                    if not (isinstance(vardef, list) and isinstance(vardef[0],int) and isinstance(vardef[1],list)):
+                        raise Exception("Wrong syntax for variable block in 'let'")
+                    v = yield from ev_g(vardef[1][0], environment)
+                    newenvironment = (varlist[0][0], v, newenvironment)
+                    varlist = varlist[1]
+                environment = newenvironment
+                v = tail[1]   
+                pass     # no return/continue: evaluate the whole list
+            # other functions evaluate all parameters before the call                
+            else:  
+                func = yield from ev_g(head, environment)
+                arguments = []
+                while isinstance(tail, list):
+                    v = yield from ev_g(tail[0],environment)
+                    arguments.append(v)
+                    tail = tail[1]
+                if func is builtin_eval:    # built-in functions with special handling
+                    if len(arguments)!=1:
+                        raise Exeption("'eval' expects 1 argument")
+                    v = arguments[0]
+                    continue
+                elif func is builtin_callcc:
+                    if len(arguments)!=1:
+                        raise Exception("Wrong number of arguments for 'call/cc'")
+                    cc = { 0: current_generator }
+                    call = [cc, [ [arguments[0], [cc,None]], None ] ]   # (cc (func cc))
+                    yield ev_g(call, None)  # let dispatcher switch generators to evaluate this
+                    return cc[1]
+                elif isinstance(func,types.FunctionType): # built-in function
+                    return func(arguments)
+                elif isinstance(func,tuple): # lambda function
+                    if len(func[0]) != len(arguments):
+                        raise Exception("Number of parameters does not match")
+                    environment = func[2]    # use environment of the function definition
+                    for i in range(len(arguments)): # when having parameters, extend the environment
+                        environment = (func[0][i], arguments[i], environment)
+                    v = func[1]  
+                    pass    # no return/continue: evaluate the whole list
+                elif isinstance(func,dict):  # return to continuation                    
+                    if 1 in func: # continuation was already used
+                        return func[1]
+                    else:
+                        func[1] = arguments[0] if len(arguments)>0 else None
+                        yield func[0]
+                        return None
+                else:
+                    raise Exception("Calling non-procedure")
+            # this position can be reached from the big list evaluation if-clause
+            # by just falling out at the end without continue or return.
+            # here, v must be a list, all elements are evaluated and the last result is the overall result
+            while isinstance(v[1],list): # not yet reached the last expression
+                yield from ev_g(v[0],environment)
+                v = v[1]
+            v = v[0]
+            continue     # proper tail-end recursion
+        # everything else just evaluates to itself
+        else:
+            return v
+
+
+
+# implementation with an external stack, completely contained in a single function
+def evaluate_without_recursion(v):
+    environment = None 
+    s = [0]  # stack structure used by operations to know where to continue  
+    l = 1    # simulate goto (as python does not have it)
+    while l>0:  # run until hitting the prepared '0' on the stack
+        if l==1:     # evaluate v and continue according to stack after that
             # symbol look-up, either local or global environments
             if isinstance(v,int):
-                return getvalue(v,environment)
+                v = getvalue(v,environment)
+                l = s.pop()
+                continue                
             # list evaluation
             elif isinstance(v,list):  
                 head = v[0]
@@ -366,101 +483,101 @@ def ev_g(v, environment):
                 if head is symbol_quote:
                     if not (isinstance(tail,list) and tail[1] is None):
                         raise Exception("Wrong syntax for 'quote'")
-                    return tail[0]
+                    v = tail[0]
+                    l = s.pop() 
+                    continue
                 elif head is symbol_lambda:   # define a lambda function
                     if not(isinstance(tail,list) and isinstance(tail[1],list)):
                         raise Exception("Wrong syntax for 'lambda'")
-                    return create_function(tail[0], tail[1], environment)
-                elif head is symbol_if:
-                    if not (isinstance(tail,list) and isinstance(tail[1],list)):
-                        raise Exception("Wrong syntax for 'if'")
-                    v = yield from ev_g(tail[0],environment)
-                    if not (v is False):
-                        v = tail[1][0]     
-                        continue    # proper tail-end recursion
-                    elif isinstance(tail[1][1], list):
-                        v = tail[1][1][0]  
-                        continue    # proper tail-end recursion
-                    else:
-                        return None
+                    v = create_function(tail[0], tail[1], environment)
+                    l = s.pop()
+                    continue
                 elif head is symbol_begin:
                     if not isinstance(tail,list):
                         raise Exception("Wrong syntax for 'begin'")
                     v = tail
-                    break    # evaluate the whole list
-                elif head is symbol_let:
+                    l = 2
+                    continue
+                elif head is symbol_if:   # if-clause 
                     if not (isinstance(tail,list) and isinstance(tail[1],list)):
-                        raise Exception("Wrong syntax for 'let'")
-                    varlist = tail[0]
-                    parameters = []
-                    arguments = []
-                    while isinstance(varlist, list):
-                        vardef = varlist[0]
-                        if not (isinstance(vardef, list) and isinstance(vardef[0],int) and isinstance(vardef[1],list)):
-                            raise Exception("Wrong syntax for variable block in 'let'")
-                        parameters.append(vardef[0])
-                        v = yield from ev_g(vardef[1][0], environment)
-                        arguments.append(v)
-                        varlist = varlist[1]
-                    environment = (parameters, arguments, environment)
-                    v = tail[1]
-                    break    # evaluate the whole list
+                        raise Exception("Wrong syntax for 'if'")
+                    s.append(tail[1]) # list containing the true and false branches
+                    s.append(2)       # where to continue after evaluating condition
+                    v = tail[0]       # the condition needs to be evaluated first
+                    l = 4
+                    continue                    
                 elif head is symbol_set:
                     if not (isinstance(tail,list) and isinstance(tail[0],int) and isinstance(tail[1],list)):
                         raise Exception("Wrong syntax for 'set!'")
-                    v = yield from ev_g(tail[1][0], environment)   
-                    setvalue(tail[0], v, environment)
-                    return None
+                    s.append(tail[0])  # the symbol that needs to be set
+                    s.append(5)        # where to continue after evaluation
+                    v = tail[1][0]
+                    l = 1
+                    continue
+                elif head is symbol_let:
+                    if not (isinstance(tail,list) and isinstance(tail[1],list)):
+                        raise Exception("Wrong syntax for 'let'")
+##                    varlist = tail[0]
+##                    parameters = []
+##                    arguments = []
+##                    while isinstance(varlist, list):
+##                        vardef = varlist[0]
+##                        if not (isinstance(vardef, list) and isinstance(vardef[0],int) and isinstance(vardef[1],list)):
+##                            raise Exception("Wrong syntax for variable block in 'let'")
+##                        parameters.append(vardef[0])
+##                        v = yield from ev_g(vardef[1][0], environment)
+##                        arguments.append(v)
+##                        varlist = varlist[1]
+##                    environment = (parameters, arguments, environment)
+##                    v = tail[1]
+##                    break    # evaluate the whole list
                 # other functions evaluate all parameters before the call                
                 else:  
-                    func = yield from ev_g(head, environment)
-                    arguments = []
-                    while isinstance(tail, list):
-                        v = yield from ev_g(tail[0],environment)
-                        arguments.append(v)
-                        tail = tail[1]
-                    if func is builtin_eval:    # built-in functions with special handling
-                        if len(arguments)!=1:
-                            raise Exeption("'eval' expects 1 argument")
-                        v = arguments[0]
-                        continue
-                    elif func is builtin_callcc:
-                        if len(arguments)!=1:
-                            raise Exception("Wrong number of arguments for 'call/cc'")
-                        cc = { 0: current_generator }
-                        call = [cc, [ [arguments[0], [cc,None]], None ] ]   # (cc (func cc))
-                        yield ev_g(call, None)  # let dispatcher switch generators to evaluate this
-                        return None
-                    elif isinstance(func,types.FunctionType): # built-in function
-                        return func(arguments)
-                    elif isinstance(func,tuple): # lambda function
-                        if len(func[0]) != len(arguments):
-                            raise Exception("Number of parameters does not match")
-                        environment = func[2]    # use environment of the function definition
-                        if len(arguments)>0:  # when having parameters, extend the environment
-                            environment = (func[0], arguments, environment)
-                        v = func[1]
-                        break       # evaluate the whole list
-                    elif isinstance(func,dict):  # return to continuation                    
-                        if 1 in func: # continuation was already used
-                            return func[1]
-                        else:
-                            func[1] = arguments[0] if len(arguments)>0 else None
-                            yield func[0]
-                            return None
-                    else:
-                        raise Exception("Calling non-procedure")
+                    raise Exception("not implemented")
+                    
             # everything else just evaluates to itself
             else:
-                return v
-        # this branch target can be reached from inner loop with break.
-        # here, v must be a list, all elements are evaluated and the last result is the overall result
-        while isinstance(v[1],list): # not yet reached the last expression
-            yield from ev_g(v[0],environment)
-            v = v[1]
-        v = v[0]
-        continue     # proper tail-end recursion
+                l = s.pop()
+                continue
+                        
+        elif l==2:     # evaluate all elements of a list in sequence, the last returns its value
+            if isinstance(v[1],list): # not yet reached the last expression                    
+                s.append(v[1])  # memorize remainder of the list to evaluate
+                s.append(3)     # where to continue after evaluation
+                v = v[0]        # what to evaluate
+                l = 1
+                continue
+            else:   # last expression
+                v = v[0]
+                l = 1
+                continue     # proper tail-end recursion                    
+        elif l==3:   # after evaluation of a list item
+            v = s.pop()
+            l = 2
+            continue                
+        elif l==4:   # second part of if
+            tail = s.pop()                                    
+            if not (v is False):
+                v = tail[0]     
+                l = 1
+                continue    # proper tail-end recursion
+            elif isinstance(tail[1], list):
+                v = tail[1][0]  
+                l = 1
+                continue    # proper tail-end recursion
+            else:
+                v = None    # evaluates to None if condition is false and no else branch
+                l = s.pop()  
+                continue
+        elif l==5:   # second part of set!
+            sym = s.pop()
+            setvalue(sym,v,environment)
+            l = s.pop()
+            continue
 
+     # after encountering '0' on the continuation stack       
+    return v
+    
 
 # decide on an evaluation engine
 evaluate = evaluate_with_generators  
