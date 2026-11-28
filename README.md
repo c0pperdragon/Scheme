@@ -17,8 +17,10 @@ numeric            | float
 symbol             | int
 pair               | list: [car, cdr]
 built-in function  | function
-lambda             | tuple: (arguments, list of expressions, environment)
-continuation       | dict
+user function      | list: [λ,[environment,[ [arg1,[arg2,None]] ,[exp1,[exp2,[exp3,None ]]]]]]  
+environment        | list: [parent_environment, [symbol . value]]
+continuation       | list: [Ω, [generator . returnvalue]]
+
 
 ## Challenges
 
@@ -33,4 +35,4 @@ but very powerful. I managed to get these things working:
 
 To keep it simple, I do not implement many of the Scheme libraries, and 
 there is only one simple construct to define local variables ("with")
-instead of the 3 flavours of let.
+instead of the 3 flavours of "let".

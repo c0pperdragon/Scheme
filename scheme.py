@@ -22,14 +22,20 @@ def main():
             traceback.print_tb(e.__traceback__)
 
 # convenience 
-def PAIR(v):        # is something a scheme pair?
+def PAIR(v):          # is something a scheme pair?
     return isinstance(v,list)
 def SYMBOL(v):        # is something a scheme symbol? 
     return isinstance(v,int)
-
+def ONLYSYMBOLS(v):    # does a list (or empty list) only contain symbols?
+    while PAIR(v):
+        if not SYMBOL(v[0]):
+            return False;
+        v = v[1]
+    return True;
+    
 # dictionary to keep symbols
-symbols = dict()  # identifier -> int
-identifiers = []  # int -> identifier
+symbols = dict()       # identifier -> int
+identifiers = []       # int -> identifier
 
 # look up the symbol, or create it if not existing yet
 def getsymbol(identifier):
@@ -51,21 +57,21 @@ def defineglobalvalue(symbol, v):
 # accessing variables from the current/parent environment or global storage
 def getvalue(symbol, environment):
     while not (environment is None):
-        if symbol is environment[0]:
-            return environment[1]
+        if symbol is environment[1][0]:
+            return environment[1][1]
         else:
-            environment = environment[2]
+            environment = environment[0]
     if symbol>=len(globalcontext) or (globalcontext[symbol] is globalcontext):
         raise Exception("Undefined symbol: "+identifiers[symbol])
     return globalcontext[symbol]
     
 def setvalue(symbol,v,environment):
     while not (environment is None):
-        if symbol is environment[0]:
-            environment[1] = v
+        if symbol is environment[1][0]:
+            environment[1][1] = v
             return
         else:
-            environment = environment[2]
+            environment = environment[0]
     if symbol>=len(globalcontext) or (globalcontext[symbol] is globalcontext):
         raise Exception("Undefined symbol: "+identifiers[symbol])
     globalcontext[symbol]=v
@@ -159,54 +165,46 @@ def writevalue(v):
     elif isinstance(v,types.FunctionType):  # built-in function
         print("#B", end="")
         print(hash(v), end="")
-    elif isinstance(v,tuple):  # lambda function
-        print("#L", end="")
-        print(v[0], end="")
-    elif isinstance(v,dict):  # continuation
-        print("#C", end="")
-        print(hash(v), end="")
     else:                      # unknown
         print("?",v, end="")
                     
 
 # built-in functions
-def builtin_null(arguments):
-    if len(arguments)!=1:
-        raise Exception("Wrong number of arguments for 'null?'")   
-    if arguments[0] is None:
+def builtin_null(a):
+    if not PAIR(a):
+        raise Exception("Need argument for 'null")
+    if a[0] is None:
         return True
     else:
         return False
-def builtin_car(arguments):
-    if len(arguments)!=1:
-        raise Exception("Wrong number of arguments for 'car'")
-    p0 = arguments[0]
+def builtin_car(a):
+    if not PAIR(a):
+        raise Exception("Need argument for 'car")
+    p0 = a[0]
     if not PAIR(p0):
         raise Exception("Pair expected as argument for 'car'")
     return p0[0]
-def builtin_cdr(arguments):
-    if len(arguments)!=1:
-        raise Exception("Wrong number of arguments for 'cdr'")
-    p0 = arguments[0]
+def builtin_cdr(a):
+    if not PAIR(a):
+        raise Exception("Need argument for 'cdr")
+    p0 = a[0]
     if not PAIR(p0):
         raise Exception("Pair expected as argument for 'cdr'")
     return p0[1]
-def builtin_cons(arguments):
-    if len(arguments)!=2:
-        raise Exception("Wrong number of arguments for 'cons'")
-    return arguments;
-def builtin_list(arguments):
-    list = None
-    for a in reversed(arguments):
-        list = [a,list]
-    return list;
-def builtin_append(arguments):
-    if len(arguments)<1:
+def builtin_cons(a):
+    if not (PAIR(a) and PAIR(a[1])):
+        raise Exception("Need 2 arguments for 'cons'")
+    return [ a[0], a[1][0] ]
+def builtin_list(a):
+    return a
+def builtin_append(a):
+    if not PAIR(a):
         raise Exception("Wrong number of arguments for 'append'")        
     totallist = None
     last = None
-    for a in arguments[:-1]:
-        l = a
+    while PAIR(a[1]):
+        l = a[0]
+        a = a[1]
         while PAIR(l):
             e = [l[0], None]
             l = l[1]                
@@ -216,22 +214,26 @@ def builtin_append(arguments):
                 last[1] = e
             last = e
     if totallist is None:
-        return arguments[-1]
+        return a[0]
     else:
-        last[1] = arguments[-1]
+        last[1] = a[0]
         return totallist
-def builtin_plus(arguments):
+def builtin_plus(a):
     sum = 0
-    for x in arguments:
+    while PAIR(a):
+        x = a[0]
+        a = a[1]
         if not isinstance(x,float):
             raise Exception("Number expected for '+'")
         sum = sum+x
     return sum    
-def builtin_minus(arguments):
-    if len(arguments)<1:
-        raise Exception("At least one argument expected for '-'")
+def builtin_minus(a):
+    if not PAIR(a):
+        raise Exception("At least one argument expected for '-'")        
     sum = None
-    for x in arguments:
+    while PAIR(a):
+        x = a[0]
+        a = a[1]
         if not isinstance(x,float):
             raise Exception("Number expected for '-'")
         if sum is None:
@@ -239,49 +241,58 @@ def builtin_minus(arguments):
         else:
             sum = sum-x
     return sum
-def builtin_less(arguments):
-    if len(arguments)!=2:
-        raise Exception("Wrong number of arguments for '<'")
-    if not (isinstance(arguments[0],float) and isinstance(arguments[1],float)):
+def builtin_less(a):
+    if not (PAIR(a) and PAIR(a[1])):
+        raise Exception("Need 2 arguments for '<'")
+    if not (isinstance(a[0],float) and isinstance(a[1][0],float)):
         raise Exception("Need numbers for '<'")
-    return arguments[0] < arguments[1]
-def builtin_lessequal(arguments):
-    if len(arguments)!=2:
-        raise Exception("Wrong number of arguments for '<='")
-    if not (isinstance(arguments[0],float) and isinstance(arguments[1],float)):
+    return a[0] < a[1][0]
+def builtin_lessequal(a):
+    if not (PAIR(a) and PAIR(a[1])):
+        raise Exception("Need 2 arguments for '<='")
+    if not (isinstance(a[0],float) and isinstance(a[1][0],float)):
         raise Exception("Need numbers for '<='")
-    return arguments[0] <= arguments[1]
-def builtin_greater(arguments):
-    if len(arguments)!=2:
-        raise Exception("Wrong number of arguments for '>'")
-    if not (isinstance(arguments[0],float) and isinstance(arguments[1],float)):
+    return a[0] <= a[1][0]
+def builtin_greater(a):
+    if not (PAIR(a) and PAIR(a[1])):
+        raise Exception("Need 2 arguments for '>'")
+    if not (isinstance(a[0],float) and isinstance(a[1][0],float)):
         raise Exception("Need numbers for '>'")
-    return arguments[0] > arguments[1]
-def builtin_greaterequal(arguments):
-    if len(arguments)!=2:
-        raise Exception("Wrong number of arguments for '>='")
-    if not (isinstance(arguments[0],float) and isinstance(arguments[1],float)):
+    return a[0] > a[1][0]
+def builtin_greaterequal(a):
+    if not (PAIR(a) and PAIR(a[1])):
+        raise Exception("Need 2 arguments for '>='")
+    if not (isinstance(a[0],float) and isinstance(a[1][0],float)):
         raise Exception("Need numbers for '>='")
-    return arguments[0] >= arguments[1]
-def builtin_not(arguments):
-    if len(arguments)!=1:
-        raise Exception("Wrong number of arguments for 'not")
-    if arguments[0] is False:
+    return a[0] >= a[1][0]
+def builtin_not(a):
+    if not PAIR(a):
+        raise Exception("Need argument for 'not")
+    if a[0] is False:
         return True
     else:
         return False
-def builtin_display(arguments):
-    if len(arguments)!=1:
-        raise Exception("Wrong number of arguments for 'display'")
-    writevalue(arguments[0])
-def builtin_newline(arguments):
-    if len(arguments)!=0:
-        raise Exception("Wrong number of arguments for 'newline'")
+def builtin_display(a):
+    if not PAIR(a):
+        raise Exception("Need argument for 'display")
+    writevalue(a[0])
+def builtin_newline(a):
     print()
-def builtin_eval(arguments): 
+def builtin_eval(a): 
     raiseException("'eval' needs to be implemented in evaluation engine")
-def builtin_callcc(arguments):
+def builtin_callcc(a):
     raiseException("'call/cc' needs to be implemented in evaluation engine")
+
+# predefined symbols used for syntax
+symbol_λ = getsymbol("λ")
+symbol_Ω = getsymbol("Ω")
+symbol_quote = getsymbol("quote")
+symbol_define = getsymbol("define")
+symbol_lambda = getsymbol("lambda")
+symbol_if = getsymbol("if")
+symbol_begin = getsymbol("begin")
+symbol_with = getsymbol("with")
+symbol_set = getsymbol("set!")
 
 defineglobalvalue(getsymbol("null?"), builtin_null)
 defineglobalvalue(getsymbol("car"), builtin_car)
@@ -302,28 +313,7 @@ defineglobalvalue(getsymbol("eval"), builtin_eval)
 defineglobalvalue(getsymbol("call/cc"), builtin_callcc)
 defineglobalvalue(getsymbol("call-with-current-continuation"), builtin_callcc)
 
-# predefined symbols used for syntax
-symbol_quote = getsymbol("quote")
-symbol_define = getsymbol("define")
-symbol_lambda = getsymbol("lambda")
-symbol_if = getsymbol("if")
-symbol_begin = getsymbol("begin")
-symbol_with = getsymbol("with")
-symbol_set = getsymbol("set!")
-
     
-# toolbox function to create a scheme function object
-def create_function(parameterlist, code, environment):
-    parameters = []
-    while PAIR(parameterlist):
-        if not SYMBOL(parameterlist[0]):
-            raise Exception("Parameter not a symbol")
-        parameters.append(parameterlist[0])
-        parameterlist = parameterlist[1]
-    if not PAIR(code):
-        raise Exception("Function body must not be empty")
-    return ( parameters, code, environment )                     
-
 # evaluation of a top-level element
 # it is only here, that define is allowed
 def evaluate_toplevel(v):
@@ -334,14 +324,14 @@ def evaluate_toplevel(v):
             if SYMBOL(p0):     # define a global symbol
                 defineglobalvalue(p0, evaluate(tail[1][0]))
                 return None
-            elif PAIR(p0) and SYMBOL(p0[0]):   # define a symbol as a function 
-                defineglobalvalue(p0[0], create_function( p0[1], tail[1], None))
+            elif PAIR(p0) and ONLYSYMBOLS(p0):  # define a symbol as a function
+                defineglobalvalue(p0[0], [symbol_λ, [None, [p0[1], tail[1]]]])
                 return None
             else:
                 raise Exception("Wrong syntax for 'define'")
     else:
         return evaluate(v)
-        
+
         
 # evaluation implementation that uses generator functions  
 def evaluate_with_generators(v):
@@ -355,10 +345,8 @@ def evaluate_with_generators(v):
         return e.value
     
 # evaluation using generators to implement the state machine
-# the environment is either None, or a tuple of 3 elements:
-#   list of arguments (symbols)
-#   list of parameters (values)
-#   link to outer environment, or None
+# the environment is either None, or a scheme-list of this form:
+#   (parent-environment, (symbol . value))
 def ev_g(v, environment):
     # to avoid many recursions, some goto's would be very convenient
     # in lack of goto, use a loop and many continues 
@@ -376,9 +364,9 @@ def ev_g(v, environment):
                     raise Exception("Wrong syntax for 'quote'")
                 return tail[0]
             elif head is symbol_lambda:   # define a lambda function
-                if not(PAIR(tail) and PAIR(tail[1])):
+                if not( PAIR(tail) and PAIR(tail[1]) and ONLYSYMBOLS(tail[0]) ):
                     raise Exception("Wrong syntax for 'lambda'")
-                return create_function(tail[0], tail[1], environment)
+                return [symbol_λ, [environment, [tail[0], tail[1] ]]]   
             elif head is symbol_begin:
                 if not PAIR(tail):
                     raise Exception("Wrong syntax for 'begin'")
@@ -406,45 +394,60 @@ def ev_g(v, environment):
                 if not (PAIR(tail) and SYMBOL(tail[0]) and PAIR(tail[1]) and PAIR(tail[1][1]) ):
                     raise Exception("Wrong syntax for 'with'")
                 v = yield from ev_g(tail[1][0], environment)
-                environment = (tail[0], v, environment)
+                environment = [environment, [tail[0], v]]
                 v = tail[1][1]
                 pass     # no return/continue: evaluate the whole list
             # other functions evaluate all parameters before the call                
             else:  
                 func = yield from ev_g(head, environment)
-                arguments = []
+                arguments = None
+                lastarg = None
                 while PAIR(tail):
                     v = yield from ev_g(tail[0],environment)
-                    arguments.append(v)
                     tail = tail[1]
+                    if arguments is None:
+                        arguments = [v, None]
+                        lastarg = arguments
+                    else:
+                        lastarg[1] = [v, None]
+                        lastarg = lastarg[1]
                 if func is builtin_eval:    # built-in functions with special handling
-                    if len(arguments)!=1:
+                    if not PAIR(arguments):
                         raise Exeption("'eval' expects 1 argument")
                     v = arguments[0]
                     continue
                 elif func is builtin_callcc:
-                    if len(arguments)!=1:
-                        raise Exception("Wrong number of arguments for 'call/cc'")
-                    cc = { 0: current_generator }
-                    call = [cc, [ [arguments[0], [cc,None]], None ] ]   # (cc (func cc))
+                    if not PAIR(arguments):
+                        raise Exception("'call/cc' expects 1 argument")
+                    # continuation descriptor
+                    cc = [symbol_Ω, [current_generator, None]]
+                    # construct a code sequence to call everything in correct sequence
+                    qcc = [symbol_quote, [cc, None]]
+                    qarg = [symbol_quote, [arguments[0], None]]
+                    call = [qcc, [ [qarg,[qcc,None]], None ] ]  # (<cc> (<arg> <cc>))
                     yield ev_g(call, None)  # let dispatcher switch generators to evaluate this
-                    return cc[1]
+                    return cc[1][1]  # when resuming here, the return value is already present
                 elif isinstance(func,types.FunctionType): # built-in function
                     return func(arguments)
-                elif isinstance(func,tuple): # lambda function
-                    if len(func[0]) != len(arguments):
-                        raise Exception("Number of parameters does not match")
-                    environment = func[2]    # use environment of the function definition
-                    for i in range(len(arguments)): # when having parameters, extend the environment
-                        environment = (func[0][i], arguments[i], environment)
-                    v = func[1]  
+                elif PAIR(func) and (func[0] is symbol_λ): # lambda function
+                    environment = func[1][0]    # use environment of the function definition
+                    parameters = func[1][1][0]  
+                    while PAIR(parameters):     # extend environment by parameters
+                        if not PAIR(arguments):
+                            raise Exception("Too few arguments for function call")
+                        environment = [environment, [ parameters[0], arguments[0] ] ]
+                        parameters = parameters[1]
+                        arguments = arguments[1]
+                    v = func[1][1][1]
                     pass    # no return/continue: evaluate the whole list
-                elif isinstance(func,dict):  # return to continuation                    
-                    if 1 in func: # continuation was already used
-                        return func[1]
-                    else:
-                        func[1] = arguments[0] if len(arguments)>0 else None
-                        yield func[0]
+                elif PAIR(func) and (func[0] is symbol_Ω) and PAIR(func[1]):  # continuation descriptor                    
+                    gen = func[1][0]
+                    if gen is None: # continuation was already used
+                        return func[1][1]
+                    else: # memorize the return value and continue at continuation
+                        func[1][0] = None   # only use once
+                        func[1][1] = arguments[0] if PAIR(arguments) else None
+                        yield gen
                         return None
                 else:
                     raise Exception("Calling non-procedure")
